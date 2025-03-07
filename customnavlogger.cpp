@@ -2,6 +2,10 @@
 #include <QDateTime>
 #include <QThread>
 
+// Define the static constants
+const int CustomNavLogger::MAX_EVENTS = 100;
+const int CustomNavLogger::MAX_PARAMS = 200;
+
 CustomNavLogger& CustomNavLogger::instance()
 {
     static CustomNavLogger instance;
@@ -213,7 +217,7 @@ void CustomNavLogger::flushLogs()
     quint32 totalDuration = m_scenarioTimer.elapsed();
     
     // Output a compact summary
-    qDebug().nospace() << "\n[NAV/" << scenarioName << "] ("
+    qDebug().nospace() << "\n[NAV/" << scenarioName << "] (" 
                << totalDuration << "ms) Events:" << m_eventCount 
                << " Nodes:" << m_nodeCount 
                << " Textures:" << m_textureCount;

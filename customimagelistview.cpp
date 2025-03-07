@@ -31,6 +31,7 @@
 #include <QtNetwork/QSslConfiguration>
 #include <QRunnable>  // Add this line to include QRunnable
 #include <QPointer>
+#include <QThread>  // Add this include for QThread::currentThreadId()
 
 
 
@@ -1299,67 +1300,121 @@ bool CustomImageListView::navigateLeft()
 
 void CustomImageListView::navigateRight()
 {
+    qDebug() << "### navigateRight START ###";
+    // Remove thread ID logging since QThread::currentThreadId() isn't available in Qt 5.6
+    qDebug() << "  Current index:" << m_currentIndex << "Total items:" << m_imageData.size();
+    
     if (m_currentIndex < 0 || m_imageData.isEmpty()) {
+        qDebug() << "### navigateRight ABORT - invalid index or empty data ###";
         return;
     }
 
     QString currentCategory = m_imageData[m_currentIndex].category;
+    qDebug() << "  Current category:" << currentCategory;
     int nextIndex = m_currentIndex + 1;
     
-    // Check if we're at the rightmost item in the category
+    // Enhanced bounds check with better logging
     bool isRightmost = true;
-    for (int i = m_currentIndex + 1; i < m_imageData.size(); i++) {
+    int rightmostIndex = m_currentIndex;
+    int itemsInCategory = 0;
+    int itemsAfterCurrent = 0;
+    
+    qDebug() << "  Checking if at rightmost position...";
+    for (int i = 0; i < m_imageData.size(); i++) {
         if (m_imageData[i].category == currentCategory) {
-            isRightmost = false;
-            break;
-        }
-    }
-    
-    if (isRightmost) {
-        qDebug() << "At rightmost position, no action";
-        return;  // At rightmost position, do nothing
-    }
-    
-    // Handle navigation within the category
-    while (nextIndex < m_imageData.size()) {
-        if (m_imageData[nextIndex].category != currentCategory) {
-            break;
-        }
-        
-        // Get category dimensions for animation calculations
-        CategoryDimensions dims = getDimensionsForCategory(currentCategory);
-        
-        // Update current index first
-        setCurrentIndex(nextIndex);
-        ensureFocus();
-        updateCurrentCategory();
-        
-        // Calculate scroll target position with animation
-        int itemsBeforeInCategory = 0;
-        for (int i = 0; i < nextIndex; i++) {
-            if (m_imageData[i].category == currentCategory) {
-                itemsBeforeInCategory++;
+            itemsInCategory++;
+            if (i > m_currentIndex) {
+                itemsAfterCurrent++;
+                if (isRightmost) { // Only log once
+                    isRightmost = false;
+                    rightmostIndex = i;
+                    qDebug() << "    Found next item in category at index" << i;
+                }
             }
         }
-        
-        qreal targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
-        
-        // Center the target item in view
-        targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
-        
-        // Log animation details to diagnose issues
-        qDebug() << "Right navigation - target X:" << targetX 
-                 << "dims.posterWidth:" << dims.posterWidth
-                 << "Items before:" << itemsBeforeInCategory;
-        
-        // Animate to target position
-        animateScroll(currentCategory, targetX);
-        
-        // Call ensure visible after animation setup
-        ensureIndexVisible(nextIndex);
-        update();
+    }
+    
+    qDebug() << "  Is rightmost: " << isRightmost 
+             << ", Items in category: " << itemsInCategory
+             << ", Items after current: " << itemsAfterCurrent;
+    
+    if (isRightmost) {
+        qDebug() << "### navigateRight ABORT - already at rightmost position ###";
         return;
     }
+    
+    // Before setting new index
+    qDebug() << "  Setting current index from:" << m_currentIndex << "to:" << nextIndex;
+    
+    // Update current index and calculate position
+    setCurrentIndex(nextIndex);
+    
+    // Log after setting index
+    ensureFocus();
+    qDebug() << "  Focus ensured, has focus:" << hasActiveFocus();
+    
+    // Calculate animation target positions with detailed logging
+    int itemsBeforeInCategory = 0;
+    for (int i = 0; i < nextIndex; i++) {
+        if (m_imageData[i].category == currentCategory) {
+            itemsBeforeInCategory++;
+        }
+    }
+    
+    qDebug() << "  Items before in category:" << itemsBeforeInCategory;
+    
+    // Get dimensions
+    CategoryDimensions dims = getDimensionsForCategory(currentCategory);
+    qDebug() << "  Category dimensions - posterWidth:" << dims.posterWidth 
+             << ", itemSpacing:" << dims.itemSpacing 
+             << ", Component width:" << width();
+    
+    qreal targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
+    targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
+    
+    qDebug() << "  Calculated target scroll position:" << targetX;
+    
+    // Check if animation already exists for category
+    qDebug() << "  Current animations tracked:" << m_categoryAnimations.size();
+    if (m_categoryAnimations.contains(currentCategory)) {
+        qDebug() << "  Animation for" << currentCategory << "exists, state:" 
+                << m_categoryAnimations[currentCategory]->state();
+    }
+    
+    // Log animation start
+    qDebug() << "  Starting animation to target position...";
+    
+    // Animate to target position with detailed error checking
+    try {
+        qDebug() << "  About to call animateScroll for category:" << currentCategory;
+        animateScroll(currentCategory, targetX);
+        qDebug() << "  animateScroll call completed";
+    } catch (const std::exception& e) {
+        qWarning() << "  EXCEPTION in animateScroll:" << e.what();
+    } catch (...) {
+        qWarning() << "  UNKNOWN EXCEPTION in animateScroll!";
+    }
+    
+    // Log after animation setup
+    qDebug() << "  Animation setup complete, checking animations:";
+    for (auto it = m_categoryAnimations.begin(); it != m_categoryAnimations.end(); ++it) {
+        QPropertyAnimation* anim = it.value();
+        if (anim) {
+            qDebug() << "    Category:" << it.key() 
+                     << ", State:" << anim->state()
+                     << ", Duration:" << anim->duration()
+                     << ", From:" << anim->startValue().toReal()
+                     << ", To:" << anim->endValue().toReal();
+        }
+    }
+    
+    qDebug() << "  Ensuring index visible...";
+    ensureIndexVisible(nextIndex);
+    
+    qDebug() << "  Calling update()...";
+    update();
+    
+    qDebug() << "### navigateRight END - navigation processing completed ###";
 }
 
 void CustomImageListView::navigateUp()
@@ -2182,25 +2237,60 @@ void CustomImageListView::setupScrollAnimation()
 
 void CustomImageListView::animateScroll(const QString& category, qreal targetX)
 {
+    qDebug() << "### animateScroll START for category:" << category;
+    qDebug() << "  Current position:" << getCategoryContentX(category) << ", Target:" << targetX;
+    
     // Stop any existing animation first
+    qDebug() << "  Stopping existing animations...";
     stopCurrentAnimation();
+    qDebug() << "  Animations stopped";
     
     // Ensure we don't exceed bounds
-    targetX = qBound(0.0, targetX, qMax(0.0, categoryContentWidth(category) - width()));
+    qreal boundedTarget = qBound(0.0, targetX, qMax(0.0, categoryContentWidth(category) - width()));
+    if (boundedTarget != targetX) {
+        qDebug() << "  Target X adjusted to:" << boundedTarget << "(was:" << targetX << ")";
+        targetX = boundedTarget;
+    }
+    
+    // Normalize category name for property naming
+    QString safeCategory = category;
+    safeCategory.replace(" ", "_").replace("&", "and");
+    QString propName = "scrollPos_" + QString::number(qHash(category));
+    
+    qDebug() << "  Using property name:" << propName << "for category:" << category;
     
     // Create a new animation for this category if it doesn't exist
-    if (!m_categoryAnimations.contains(category)) {
-        QPropertyAnimation* anim = new QPropertyAnimation(this);
+    bool hasExisting = m_categoryAnimations.contains(category);
+    qDebug() << "  Has existing animation:" << hasExisting;
+    
+    QPropertyAnimation* anim = nullptr;
+    if (!hasExisting) {
+        qDebug() << "  Creating new animation...";
+        
+        anim = new QPropertyAnimation(this);
         anim->setDuration(300);
         anim->setEasingCurve(QEasingCurve::OutCubic);
         
-        // We need a unique property name that doesn't include special characters
-        QString propName = "scrollPos_" + QString::number(qHash(category));
+        // Initialize the dynamic property if it doesn't exist
+        qreal currentPos = getCategoryContentX(category);
+        qDebug() << "  Setting initial property value:" << currentPos;
         
-        // Initialize the dynamic property
-        setProperty(propName.toLatin1().constData(), getCategoryContentX(category));
+        // Check if property already exists
+        bool propExists = property(propName.toLatin1()).isValid();
+        qDebug() << "  Property already exists:" << propExists;
+        
+        // Ensure property exists
+        bool propCreated = setProperty(propName.toLatin1(), currentPos);
+        qDebug() << "  Dynamic property creation result:" << propCreated;
+        
+        // Verify property was created
+        QVariant checkProp = property(propName.toLatin1());
+        qDebug() << "  Property after creation - valid:" << checkProp.isValid() 
+                 << ", type:" << (checkProp.isValid() ? checkProp.typeName() : "invalid")
+                 << ", value:" << (checkProp.isValid() ? checkProp.toDouble() : -9999.0);
         
         // Configure animation
+        qDebug() << "  Setting animation parameters...";
         anim->setTargetObject(this);
         anim->setPropertyName(propName.toLatin1());
         
@@ -2209,33 +2299,52 @@ void CustomImageListView::animateScroll(const QString& category, qreal targetX)
         anim->setProperty("category", category);
         
         // Connect using old-style signal/slot for Qt 5.6 compatibility
-        connect(anim, SIGNAL(valueChanged(QVariant)), this, SLOT(onScrollAnimationValueChanged(QVariant)));
+        qDebug() << "  Connecting animation signals...";
+        bool connected1 = connect(anim, SIGNAL(valueChanged(QVariant)), 
+                                this, SLOT(onScrollAnimationValueChanged(QVariant)));
+        bool connected2 = connect(anim, SIGNAL(finished()), 
+                                this, SLOT(onAnimationFinished()));
+        qDebug() << "  Signal connections - valueChanged:" << connected1 
+                 << ", finished:" << connected2;
         
         m_categoryAnimations[category] = anim;
+    } else {
+        qDebug() << "  Using existing animation";
+        anim = m_categoryAnimations[category];
+        
+        // Ensure animation is properly configured
+        if (anim->state() == QPropertyAnimation::Running) {
+            qDebug() << "  Stopping already running animation...";
+            anim->stop();
+        }
+        
+        // Ensure property has correct value
+        qreal currentPos = getCategoryContentX(category);
+        qDebug() << "  Updating property value to match current position:" << currentPos;
+        setProperty(propName.toLatin1(), currentPos);
     }
     
-    // Get the animation for this category
-    QPropertyAnimation* anim = m_categoryAnimations[category];
-    if (!anim) return;
-    
-    // Update the property before starting the animation
-    QString propName = "scrollPos_" + QString::number(qHash(category));
-    setProperty(propName.toLatin1().constData(), getCategoryContentX(category));
-    
-    // Ensure animation is stopped
-    if (anim->state() == QPropertyAnimation::Running) {
-        anim->stop();
+    // Get up-to-date animation object
+    anim = m_categoryAnimations[category];
+    if (!anim) {
+        qCritical() << "  CRITICAL ERROR: Animation object is NULL after setup!";
+        return;
     }
     
-    // Configure and start
-    anim->setStartValue(QVariant(getCategoryContentX(category)));
+    // Configure and start animation
+    qreal currentPos = getCategoryContentX(category);
+    qDebug() << "  Animation configuration - current pos:" << currentPos << ", target:" << targetX;
+    anim->setStartValue(QVariant(currentPos));
     anim->setEndValue(QVariant(targetX));
     
-    qDebug() << "Starting scroll animation for category:" << category 
-             << "from:" << getCategoryContentX(category) 
-             << "to:" << targetX;
-             
+    qDebug() << "  Starting animation...";
     anim->start();
+    
+    // Verify animation is running
+    qDebug() << "  After start() - animation state:" << anim->state() 
+             << "(0=stopped, 1=paused, 2=running)";
+    
+    qDebug() << "### animateScroll END ###";
 }
 
 void CustomImageListView::stopCurrentAnimation()
@@ -2426,5 +2535,163 @@ void CustomImageListView::animateVerticalScroll(qreal targetY)
     
     // Start the animation
     m_scrollAnimation->start();
+}
+
+void CustomImageListView::onScrollAnimationValueChanged(const QVariant &value) 
+{
+    QPropertyAnimation* anim = qobject_cast<QPropertyAnimation*>(sender());
+    if (!anim) {
+        qWarning() << "onScrollAnimationValueChanged: No valid animation sender!";
+        return;
+    }
+    
+    // Get the category from the animation object
+    QString category = anim->property("category").toString();
+    if (category.isEmpty()) {
+        qWarning() << "onScrollAnimationValueChanged: No category property in animation!";
+        return;
+    }
+    
+    qreal newValue = value.toReal();
+    
+    // Only log occasionally to avoid flooding the console
+    static int logCounter = 0;
+    if (logCounter++ % 20 == 0) { // Reduced frequency to every 20 updates
+        qDebug() << "Animation update for" << category << ":"
+                 << "position=" << newValue
+                 << "progress=" << anim->currentTime() << "/" << anim->duration() << "ms";
+    }
+    
+    // Update the content X position for this category
+    setCategoryContentX(category, newValue);
+    
+    // Check if animation has reached end value
+    if (qAbs(newValue - anim->endValue().toReal()) < 0.001) {
+        qDebug() << "Animation for" << category << "reached end value:" << newValue;
+    }
+}
+
+void CustomImageListView::onAnimationFinished() 
+{
+    QPropertyAnimation *anim = qobject_cast<QPropertyAnimation*>(sender());
+    if (!anim) {
+        qWarning() << "onAnimationFinished: No valid animation sender!";
+        return;
+    }
+    
+    QString category = anim->property("category").toString();
+    if (category.isEmpty()) {
+        qWarning() << "onAnimationFinished: Could not determine category from animation!";
+        
+        // Try to find the category from our map
+        for (auto it = m_categoryAnimations.begin(); it != m_categoryAnimations.end(); ++it) {
+            if (it.value() == anim) {
+                category = it.key();
+                qDebug() << "Found category from map lookup:" << category;
+                break;
+            }
+        }
+        
+        if (category.isEmpty()) {
+            qWarning() << "CRITICAL: Failed to find category for animation - memory corruption possible!";
+            return;
+        }
+    }
+    
+    qDebug() << "### Animation FINISHED for category:" << category;
+    qDebug() << "  Final position:" << getCategoryContentX(category);
+    qDebug() << "  Animation duration:" << anim->duration() << "ms";
+    qDebug() << "  Current property value:" << property(anim->propertyName()).toReal();
+    
+    // Check if this animation is still in our map
+    if (m_categoryAnimations.contains(category)) {
+        qDebug() << "  Animation present in map, removing";
+        m_categoryAnimations.remove(category);
+    } else {
+        qWarning() << "  Animation not found in map! Possible double-deletion or memory issue";
+    }
+    
+    qDebug() << "  Remaining active animations:" << m_categoryAnimations.size();
+}
+
+// Add diagnostic utility method to track dynamic properties
+Q_INVOKABLE void CustomImageListView::dumpDynamicProperties()
+{
+    qDebug() << "=== Dynamic Property Dump for CustomImageListView ===";
+    
+    // Get all property names for this QObject
+    QList<QByteArray> propNames = dynamicPropertyNames();
+    qDebug() << "Total dynamic properties:" << propNames.size();
+    
+    for (const QByteArray &propName : propNames) {
+        QVariant value = property(propName);
+        qDebug() << " - Property:" << propName 
+                 << "Type:" << (value.isValid() ? value.typeName() : "invalid")
+                 << "Value:" << (value.isValid() ? value.toString() : "N/A");
+    }
+    
+    // Also dump animation state
+    qDebug() << "\nActive animations:" << m_categoryAnimations.size();
+    for (auto it = m_categoryAnimations.begin(); it != m_categoryAnimations.end(); ++it) {
+        QPropertyAnimation* anim = it.value();
+        if (anim) {
+            qDebug() << " - Category:" << it.key()
+                     << "State:" << anim->state() 
+                     << "Property:" << anim->propertyName()
+                     << "Target:" << (anim->targetObject() == this ? "this" : "other");
+        } else {
+            qDebug() << " - Category:" << it.key() << "has NULL animation!";
+        }
+    }
+    
+    qDebug() << "================================================";
+}
+
+bool CustomImageListView::checkAndCreateDynamicProperty(const QString& propName)
+{
+    qDebug() << "Checking dynamic property:" << propName;
+    
+    QVariant existingValue = property(propName.toLatin1());
+    bool exists = existingValue.isValid();
+    
+    qDebug() << "Property" << propName << "exists:" << exists 
+             << "type:" << (exists ? existingValue.typeName() : "n/a");
+    
+    if (!exists) {
+        qDebug() << "Creating dynamic property:" << propName;
+        bool success = setProperty(propName.toLatin1(), QVariant(0.0));
+        qDebug() << "Property creation result:" << success;
+        
+        // Verify property is usable for animation
+        QVariant testVal = property(propName.toLatin1());
+        qDebug() << "Property after creation - valid:" << testVal.isValid() 
+                 << "type:" << (testVal.isValid() ? testVal.typeName() : "n/a");
+                 
+        // Format conversion test
+        if (testVal.isValid()) {
+            bool canConvert = testVal.canConvert<qreal>();
+            qDebug() << "Property can convert to qreal:" << canConvert;
+            if (canConvert) {
+                qreal testDouble = testVal.toReal();
+                qDebug() << "Converted value:" << testDouble;
+            }
+        }
+        
+        return success;
+    }
+    
+    return true;
+}
+
+void CustomImageListView::onAnimationValueDetected(const QVariant &value)
+{
+    // Simple diagnostic logging slot
+    qDebug() << "Animation value detected:" << value.toReal();
+}
+
+void CustomImageListView::onAnimationFinishedDetected()
+{
+    // Simple diagnostic logging slot
+    qDebug() << "Animation finished detected";
 }
 

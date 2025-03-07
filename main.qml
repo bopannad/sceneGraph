@@ -168,7 +168,8 @@ Window {
             }
 
             onAssetFocused: function(assetData) {
-                console.log("Asset focused, complete data:", JSON.stringify(assetData, null, 2))
+                console.log("Asset focused changed")
+                //console.log("Asset focused, complete data:", JSON.stringify(assetData, null, 2))
                 // Now you have access to all JSON fields exactly as they were in the source
             }
 
@@ -205,4 +206,6 @@ Window {
         z: 1000
         visible: viewLoader.item ? true : false
     }
+
+    
 }

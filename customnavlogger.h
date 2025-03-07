@@ -97,12 +97,12 @@ private:
     quint64 m_scenarioStartTime = 0;
     
     // Fixed-size circular buffers (no dynamic allocation during logging)
-    static const int MAX_EVENTS = 128;
-    static const int MAX_PARAMS = 128;
-    NavEvent m_events[MAX_EVENTS];
-    NavParam m_params[MAX_PARAMS];
-    int m_eventCount = 0;
-    int m_paramCount = 0;
+    static const int MAX_EVENTS;  
+    static const int MAX_PARAMS;  
+    NavEvent m_events[100];      
+    NavParam m_params[200];      
+    int m_eventCount;            
+    int m_paramCount;            
     
     // Thread safety for logging
     QMutex m_logMutex;
@@ -138,3 +138,4 @@ private:
     if (CustomNavLogger::instance().isEnabled()) { \
         CustomNavLogger::instance().logPosition(checkpoint, x, y, idx); \
     }
+    

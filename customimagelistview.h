@@ -261,6 +261,13 @@ private:
     // Add this declaration to the private section
     void animateVerticalScroll(qreal targetY);
 
+    // Add in the private methods section:
+    void connectAnimationCompletionSignals();
+    void abortCurrentNavigationScenario();
+
+    // Add this helper method for property validation
+    bool checkAndCreateDynamicProperty(const QString& propName);
+
 public:
     CustomImageListView(QQuickItem *parent = nullptr);
     ~CustomImageListView();
@@ -341,6 +348,9 @@ public:
                      << "Textures:" << m_textureCount;
         }
     }
+
+    // Add diagnostic method
+    Q_INVOKABLE void dumpDynamicProperties();
 
 signals:
     void countChanged();
@@ -503,6 +513,8 @@ private slots:
     }
 
     void onNetworkError(QNetworkReply::NetworkError code) {
+        Q_UNUSED(code); // Mark parameter as intentionally unused
+        
         QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
         if (!reply) return;
         
@@ -534,17 +546,12 @@ private slots:
         }
     }
     
-    void onScrollAnimationValueChanged(const QVariant &value) {
-        QPropertyAnimation* anim = qobject_cast<QPropertyAnimation*>(sender());
-        if (!anim) return;
-        
-        // Get the category from the animation object
-        QString category = anim->property("category").toString();
-        if (category.isEmpty()) return;
-        
-        // Update the content X position for this category
-        setCategoryContentX(category, value.toReal());
-    }
+    void onScrollAnimationValueChanged(const QVariant &value);
+    void onAnimationFinished();
+
+    // Add these diagnostic slots 
+    void onAnimationValueDetected(const QVariant &value);
+    void onAnimationFinishedDetected();
 };
 
 #endif // CUSTOMIMAGELISTVIEW_H
