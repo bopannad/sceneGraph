@@ -27,13 +27,14 @@ QStringList OutputCapture::m_capturedOutput;
 QtMessageHandler OutputCapture::m_originalHandler = nullptr;
 
 // Implement static methods
-void OutputCapture::captureMessage(QtMsgType type, const QMessageLogContext &context, const QString &msg) {
+void OutputCapture::captureMessage(QtMsgType type, const QMessageLogContext &context, const QString &msg) 
+{
     Q_UNUSED(context);
     
-    // Store original message without type prefix for exact matching
+    // Store original message
     m_capturedOutput.append(msg);
     
-    // Also store with type prefix for debug purposes
+    // Also store with type prefix for debugging
     QString typedMsg;
     switch(type) {
         case QtDebugMsg:
@@ -42,11 +43,20 @@ void OutputCapture::captureMessage(QtMsgType type, const QMessageLogContext &con
         case QtWarningMsg:
             typedMsg = QString("Warning: %1").arg(msg);
             break;
+        case QtCriticalMsg:
+            typedMsg = QString("Critical: %1").arg(msg);
+            break;
+        case QtFatalMsg:
+            typedMsg = QString("Fatal: %1").arg(msg);
+            break;
         default:
             typedMsg = msg;
             break;
     }
     m_capturedOutput.append(typedMsg);
+    
+    // Also print to console for immediate feedback
+    fprintf(stderr, "%s\n", qPrintable(msg));
     
     // Forward critical and fatal messages
     if ((type == QtCriticalMsg || type == QtFatalMsg) && m_originalHandler) {
@@ -87,6 +97,62 @@ private:
     OutputCapture* m_capture;
 
 private slots:
+
+    // Add this new test function after other tests
+    void test_displayLogs()
+    {
+        qDebug() << "\n=== Navigation Logger Output Demo ===\n";
+        
+        OutputCapture::reset();
+        CustomNavLogger& logger = CustomNavLogger::instance();
+        
+        // Start a navigation scenario
+        logger.beginScenario(CustomNavLogger::SCENARIO_NAV_RIGHT);
+        
+        // Log various types of events
+        NAV_LOG_EVENT(CustomNavLogger::NAV_RIGHT_START);
+        NAV_LOG_EVENT_IDX(CustomNavLogger::NAV_INDEX_CHANGED, 5);
+        NAV_LOG_POS("MainItem", 100.0, 200.0, 1);
+        NAV_LOG_PARAM(CustomNavLogger::NAV_CALC_POS, 1, "offset", 150);
+        logger.logMetrics(10, 5, 16);
+        NAV_LOG_EVENT(CustomNavLogger::NAV_RIGHT_END);
+        
+        // Force flush logs before ending
+        logger.flushLogs();
+        
+        // Get captured output
+        QStringList outputs = OutputCapture::getCapturedOutput();
+        
+        qDebug() << "Raw Logger Output:";
+        qDebug() << "----------------------------------------";
+        for(const QString& msg : outputs) {
+            // Remove Debug/Warning prefixes for cleaner output
+            QString cleanMsg = msg;
+            cleanMsg.remove("Debug: ").remove("Warning: ");
+            qDebug().noquote() << cleanMsg;
+        }
+        qDebug() << "----------------------------------------";
+        
+        logger.endScenario();
+        
+        // Process events and get final output
+        QCoreApplication::processEvents();
+        QTest::qWait(200);
+        
+        outputs = OutputCapture::getCapturedOutput();
+        qDebug() << "\nFinal Logger State:";
+        qDebug() << "----------------------------------------";
+        for(const QString& msg : outputs) {
+            QString cleanMsg = msg;
+            cleanMsg.remove("Debug: ").remove("Warning: ");
+            qDebug().noquote() << cleanMsg;
+        }
+        qDebug() << "----------------------------------------\n";
+        
+        // This test always passes - it's for display purposes
+        QVERIFY(true);
+    }
+
     void initTestCase() {
         m_capture = new OutputCapture();
     }

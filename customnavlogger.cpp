@@ -19,7 +19,8 @@ CustomNavLogger::CustomNavLogger(QObject* parent) : QObject(parent),
     m_enabled(true),
     m_nodeCount(0),
     m_textureCount(0),
-    m_renderTimeMs(0)
+    m_renderTimeMs(0),
+    m_threadSafetyEnabled(false) // Initialize thread safety flag
 {
     // Initialize arrays to prevent undefined behavior
     memset(m_events, 0, sizeof(m_events));
@@ -36,7 +37,7 @@ CustomNavLogger::~CustomNavLogger()
 
 bool CustomNavLogger::isScenarioActive() const
 {
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     return m_activeScenario != SCENARIO_NONE;
 }
 
@@ -46,7 +47,7 @@ void CustomNavLogger::beginScenario(NavScenarioType type)
     
     qDebug() << "Attempting to begin scenario:" << type;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     // End previous scenario if active
     if (m_activeScenario != SCENARIO_NONE) {
@@ -56,10 +57,13 @@ void CustomNavLogger::beginScenario(NavScenarioType type)
         NavScenarioType oldType = m_activeScenario;
         m_activeScenario = SCENARIO_NONE;
         
-        // Temporarily unlock mutex for nested call
-        locker.unlock();
-        endScenario(); 
-        locker.relock();
+        if (m_threadSafetyEnabled) {
+            locker.unlock();
+            endScenario();
+            locker.relock();
+        } else {
+            endScenario();
+        }
         
         m_activeScenario = oldType;
     }
@@ -86,7 +90,7 @@ void CustomNavLogger::endScenario()
 {
     if (!m_enabled) return;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     if (m_activeScenario == SCENARIO_NONE) return;
     
@@ -113,7 +117,7 @@ void CustomNavLogger::logEvent(NavEventType type, qint16 index)
 {
     if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     if (m_eventCount >= MAX_EVENTS) {
         qWarning() << "Event buffer full, dropping event:" << type;
@@ -136,7 +140,7 @@ void CustomNavLogger::logEventWithParam(NavEventType type, qint16 index, const c
 {
     if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     // First log the event while under the same lock
     if (m_eventCount < MAX_EVENTS) {
@@ -166,7 +170,7 @@ void CustomNavLogger::logEventWithParam(NavEventType type, qint16 index, const c
 {
     if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     // Log event under same lock
     if (m_eventCount < MAX_EVENTS) {
@@ -199,7 +203,7 @@ void CustomNavLogger::logPosition(const char* checkpoint, qreal x, qreal y, qint
     // Log generic position event
     logEvent(NAV_CALC_POS, index);
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     // Add X coordinate
     int paramIndex = m_paramCount % MAX_PARAMS;
@@ -223,7 +227,7 @@ void CustomNavLogger::logBoundsCheck(const char* boundType, qreal value, qreal m
     // Log bounds check event
     logEvent(NAV_BOUNDS_CHECK);
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     // Add value param
     int paramIndex = m_paramCount % MAX_PARAMS;
@@ -258,7 +262,7 @@ void CustomNavLogger::logMetrics(int nodeCount, int textureCount, qint64 renderT
 {
     if (!m_enabled) return;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
     m_nodeCount = nodeCount;
     m_textureCount = textureCount;
@@ -269,7 +273,7 @@ void CustomNavLogger::flushLogs()
 {
     if (!m_enabled) return;
     
-    QMutexLocker locker(&m_logMutex);
+    QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     flushLogsNoLock();
 }
 

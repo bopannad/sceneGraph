@@ -84,6 +84,10 @@ public:
     // Output all collected logs (called at scenario end)
     void flushLogs();
     
+    // Add after other public methods
+    void setThreadSafetyEnabled(bool enabled) { m_threadSafetyEnabled = enabled; }
+    bool isThreadSafetyEnabled() const { return m_threadSafetyEnabled; }
+
 private:
     CustomNavLogger(QObject* parent = nullptr);
     ~CustomNavLogger();
@@ -119,6 +123,8 @@ private:
     
     // Helper for generating parameter strings in flushLogs
     QString getParamString(int paramIndex);
+
+    bool m_threadSafetyEnabled = true;  // Add this member
 };
 
 // Convenience macro for concise logging (no-op when logging disabled)
