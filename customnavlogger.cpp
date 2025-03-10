@@ -33,7 +33,10 @@ void CustomNavLogger::beginScenario(NavScenarioType type)
     
     // End previous scenario if active
     if (m_activeScenario != SCENARIO_NONE) {
+        NavScenarioType oldType = m_activeScenario;
+        m_activeScenario = SCENARIO_NONE;  // Prevent recursion
         endScenario();
+        m_activeScenario = oldType;  // Restore for proper cleanup
     }
     
     // Start new scenario
@@ -43,8 +46,13 @@ void CustomNavLogger::beginScenario(NavScenarioType type)
     m_eventCount = 0;
     m_paramCount = 0;
     
-    // Log the start event
-    logEvent(NAV_SCENARIO_START);
+    // Log the start event while still under lock
+    int eventIndex = m_eventCount % MAX_EVENTS;
+    m_events[eventIndex].type = NAV_SCENARIO_START;
+    m_events[eventIndex].scenario = type;
+    m_events[eventIndex].index = -1;
+    m_events[eventIndex].timestamp = 0;
+    m_eventCount++;
 }
 
 void CustomNavLogger::endScenario()
@@ -69,6 +77,11 @@ void CustomNavLogger::logEvent(NavEventType type, qint16 index)
     
     QMutexLocker locker(&m_logMutex);
     
+    if (m_eventCount >= MAX_EVENTS) {
+        qWarning() << "Event buffer full, dropping event:" << type;
+        return;
+    }
+    
     // Use fixed-size circular buffer (no allocations)
     int eventIndex = m_eventCount % MAX_EVENTS;
     
@@ -85,15 +98,25 @@ void CustomNavLogger::logEventWithParam(NavEventType type, qint16 index, const c
 {
     if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
     
-    // Log event first
-    logEvent(type, index);
-    
     QMutexLocker locker(&m_logMutex);
     
-    // Then add parameter
-    int paramIndex = m_paramCount % MAX_PARAMS;
+    // First log the event while under the same lock
+    if (m_eventCount < MAX_EVENTS) {
+        int eventIndex = m_eventCount % MAX_EVENTS;
+        m_events[eventIndex].type = type;
+        m_events[eventIndex].scenario = m_activeScenario;
+        m_events[eventIndex].index = index;
+        m_events[eventIndex].timestamp = m_scenarioTimer.elapsed();
+        m_eventCount++;
+    }
     
-    // Use the type field for string hash to avoid storing strings
+    // Then add parameter if there's space
+    if (m_paramCount >= MAX_PARAMS) {
+        qWarning() << "Parameter buffer full, dropping param:" << paramName;
+        return;
+    }
+    
+    int paramIndex = m_paramCount % MAX_PARAMS;
     m_params[paramIndex].type = qChecksum(paramName, qstrlen(paramName)) % 255;
     m_params[paramIndex].value = value;
     m_params[paramIndex].floatValue = 0.0f;
@@ -105,15 +128,25 @@ void CustomNavLogger::logEventWithParam(NavEventType type, qint16 index, const c
 {
     if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
     
-    // Log event first
-    logEvent(type, index);
-    
     QMutexLocker locker(&m_logMutex);
     
-    // Then add parameter
-    int paramIndex = m_paramCount % MAX_PARAMS;
+    // Log event under same lock
+    if (m_eventCount < MAX_EVENTS) {
+        int eventIndex = m_eventCount % MAX_EVENTS;
+        m_events[eventIndex].type = type;
+        m_events[eventIndex].scenario = m_activeScenario;
+        m_events[eventIndex].index = index;
+        m_events[eventIndex].timestamp = m_scenarioTimer.elapsed();
+        m_eventCount++;
+    }
     
-    // Use the type field for string hash to avoid storing strings
+    // Add parameter if there's space
+    if (m_paramCount >= MAX_PARAMS) {
+        qWarning() << "Parameter buffer full, dropping param:" << paramName;
+        return;
+    }
+    
+    int paramIndex = m_paramCount % MAX_PARAMS;
     m_params[paramIndex].type = qChecksum(paramName, qstrlen(paramName)) % 255;
     m_params[paramIndex].value = 0;
     m_params[paramIndex].floatValue = value;

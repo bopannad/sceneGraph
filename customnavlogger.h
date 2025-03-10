@@ -7,55 +7,54 @@
 #include <QMutex>
 #include <QtGlobal>
 
-// Numeric codes for navigation events to avoid string allocations
-enum NavEventType {
-    NAV_SCENARIO_START = 1,
-    NAV_RIGHT_START,
-    NAV_RIGHT_END,
-    NAV_LEFT_START,
-    NAV_LEFT_END,
-    NAV_UP_START,
-    NAV_UP_END,
-    NAV_DOWN_START,
-    NAV_DOWN_END,
-    NAV_ANIM_START,
-    NAV_ANIM_COMPLETE,
-    NAV_ANIM_ABORTED,
-    NAV_INDEX_CHANGED,
-    NAV_BOUNDS_CHECK,
-    NAV_CALC_POS,
-    NAV_CALC_COMPLETE
-};
-
-// Numeric codes for scenario types
-enum NavScenarioType {
-    SCENARIO_NONE = 0,
-    SCENARIO_NAV_RIGHT,
-    SCENARIO_NAV_LEFT,
-    SCENARIO_NAV_UP,
-    SCENARIO_NAV_DOWN,
-    SCENARIO_ITEM_SELECTED
-};
-
-// Lightweight event structure (8 bytes)
-struct NavEvent {
-    quint8 type;          // Event type code
-    quint8 scenario;      // Scenario type
-    qint16 index;         // Current item index (-1 if N/A)
-    quint32 timestamp;    // Milliseconds since scenario start
-};
-
-// Lightweight numeric parameter (12 bytes)
-struct NavParam {
-    quint8 type;          // Parameter type
-    quint32 value;        // Integer value
-    float floatValue;     // Float value (when needed)
-};
-
 class CustomNavLogger : public QObject
 {
     Q_OBJECT
 public:
+    // Move enums inside the class
+    enum NavEventType {
+        NAV_SCENARIO_START = 1,
+        NAV_RIGHT_START,
+        NAV_RIGHT_END,
+        NAV_LEFT_START,
+        NAV_LEFT_END,
+        NAV_UP_START,
+        NAV_UP_END,
+        NAV_DOWN_START,
+        NAV_DOWN_END,
+        NAV_ANIM_START,
+        NAV_ANIM_COMPLETE,
+        NAV_ANIM_ABORTED,
+        NAV_INDEX_CHANGED,
+        NAV_BOUNDS_CHECK,
+        NAV_CALC_POS,
+        NAV_CALC_COMPLETE
+    };
+
+    enum NavScenarioType {
+        SCENARIO_NONE = 0,
+        SCENARIO_NAV_RIGHT,
+        SCENARIO_NAV_LEFT,
+        SCENARIO_NAV_UP,
+        SCENARIO_NAV_DOWN,
+        SCENARIO_ITEM_SELECTED,
+        SCENARIO_NAV_START
+    };
+    
+    // Add these missing structures for efficient storage
+    struct NavEvent {
+        quint8 type;             // NavEventType (using quint8 to save memory)
+        quint8 scenario;         // NavScenarioType (using quint8 to save memory)
+        qint16 index;            // Item index for the event
+        quint32 timestamp;       // Milliseconds since scenario start
+    };
+    
+    struct NavParam {
+        quint8 type;             // Hash of param name (avoid string storage)
+        qint32 value;            // Integer value
+        float floatValue;        // Float value alternative
+    };
+
     static CustomNavLogger& instance();
     
     // Start/end scenario tracking
@@ -138,4 +137,3 @@ private:
     if (CustomNavLogger::instance().isEnabled()) { \
         CustomNavLogger::instance().logPosition(checkpoint, x, y, idx); \
     }
-    

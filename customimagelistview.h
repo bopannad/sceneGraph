@@ -391,6 +391,7 @@ protected:
 
 private:
     QMutex m_networkMutex;
+    QMutex m_animationMutex;  // Add this mutex
     
     // Add loadAllImages declaration with other loading-related methods
     void loadAllImages();
