@@ -3,3 +3,4 @@
 scratchpad/ideas.md
 .gitignore
 QtSGWidget.pro.user
+tests/build*

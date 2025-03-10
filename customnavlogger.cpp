@@ -12,9 +12,18 @@ CustomNavLogger& CustomNavLogger::instance()
     return instance;
 }
 
-CustomNavLogger::CustomNavLogger(QObject* parent) : QObject(parent)
+CustomNavLogger::CustomNavLogger(QObject* parent) : QObject(parent),
+    m_eventCount(0),
+    m_paramCount(0),
+    m_activeScenario(SCENARIO_NONE),
+    m_enabled(true),
+    m_nodeCount(0),
+    m_textureCount(0),
+    m_renderTimeMs(0)
 {
-    // Pre-allocate our fixed buffers to avoid any runtime allocations
+    // Initialize arrays to prevent undefined behavior
+    memset(m_events, 0, sizeof(m_events));
+    memset(m_params, 0, sizeof(m_params));
 }
 
 CustomNavLogger::~CustomNavLogger()
@@ -25,18 +34,34 @@ CustomNavLogger::~CustomNavLogger()
     }
 }
 
+bool CustomNavLogger::isScenarioActive() const
+{
+    QMutexLocker locker(&m_logMutex);
+    return m_activeScenario != SCENARIO_NONE;
+}
+
 void CustomNavLogger::beginScenario(NavScenarioType type)
 {
     if (!m_enabled) return;
+    
+    qDebug() << "Attempting to begin scenario:" << type;
     
     QMutexLocker locker(&m_logMutex);
     
     // End previous scenario if active
     if (m_activeScenario != SCENARIO_NONE) {
+        qDebug() << "Ending previous scenario before starting new one";
+        
+        // Need to release lock before recursive call
         NavScenarioType oldType = m_activeScenario;
-        m_activeScenario = SCENARIO_NONE;  // Prevent recursion
-        endScenario();
-        m_activeScenario = oldType;  // Restore for proper cleanup
+        m_activeScenario = SCENARIO_NONE;
+        
+        // Temporarily unlock mutex for nested call
+        locker.unlock();
+        endScenario(); 
+        locker.relock();
+        
+        m_activeScenario = oldType;
     }
     
     // Start new scenario
@@ -46,29 +71,42 @@ void CustomNavLogger::beginScenario(NavScenarioType type)
     m_eventCount = 0;
     m_paramCount = 0;
     
-    // Log the start event while still under lock
-    int eventIndex = m_eventCount % MAX_EVENTS;
-    m_events[eventIndex].type = NAV_SCENARIO_START;
-    m_events[eventIndex].scenario = type;
-    m_events[eventIndex].index = -1;
-    m_events[eventIndex].timestamp = 0;
-    m_eventCount++;
+    // Log the start event
+    NavEvent& evt = m_events[0];
+    evt.type = NAV_SCENARIO_START;
+    evt.scenario = type;
+    evt.index = -1;
+    evt.timestamp = 0;
+    m_eventCount = 1;
+    
+    qDebug() << "Scenario started successfully";
 }
 
 void CustomNavLogger::endScenario()
 {
-    if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
+    if (!m_enabled) return;
     
     QMutexLocker locker(&m_logMutex);
     
-    // Log the end event
-    logEvent(NAV_CALC_COMPLETE);
+    if (m_activeScenario == SCENARIO_NONE) return;
     
-    // Output debug data
-    flushLogs();
+    // Log the end event while we have the lock
+    if (m_eventCount < MAX_EVENTS) {
+        int eventIndex = m_eventCount % MAX_EVENTS;
+        m_events[eventIndex].type = NAV_CALC_COMPLETE;
+        m_events[eventIndex].scenario = m_activeScenario;
+        m_events[eventIndex].index = -1;
+        m_events[eventIndex].timestamp = m_scenarioTimer.elapsed();
+        m_eventCount++;
+    }
     
-    // Reset scenario
+    // Flush logs while still under the same lock
+    flushLogsNoLock();
+    
+    // Reset scenario state
     m_activeScenario = SCENARIO_NONE;
+    m_eventCount = 0;
+    m_paramCount = 0;
 }
 
 void CustomNavLogger::logEvent(NavEventType type, qint16 index)
@@ -232,7 +270,11 @@ void CustomNavLogger::flushLogs()
     if (!m_enabled) return;
     
     QMutexLocker locker(&m_logMutex);
-    
+    flushLogsNoLock();
+}
+
+void CustomNavLogger::flushLogsNoLock()
+{
     if (m_eventCount == 0) return;
     
     // Generate scenario name
@@ -250,10 +292,10 @@ void CustomNavLogger::flushLogs()
     quint32 totalDuration = m_scenarioTimer.elapsed();
     
     // Output a compact summary
-    qDebug().nospace() << "\n[NAV/" << scenarioName << "] (" 
-               << totalDuration << "ms) Events:" << m_eventCount 
-               << " Nodes:" << m_nodeCount 
-               << " Textures:" << m_textureCount;
+    qDebug() << "NAV/" << scenarioName << "scenario started";
+    qDebug().nospace() << "Duration:" << totalDuration << "ms, Events:" << m_eventCount 
+               << ", Nodes:" << m_nodeCount 
+               << ", Textures:" << m_textureCount;
     
     // Output detailed event timeline
     qDebug() << "  Timeline:";

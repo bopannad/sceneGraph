@@ -12,6 +12,7 @@ class CustomNavLogger : public QObject
     Q_OBJECT
 public:
     // Move enums inside the class
+
     enum NavEventType {
         NAV_SCENARIO_START = 1,
         NAV_RIGHT_START,
@@ -60,7 +61,7 @@ public:
     // Start/end scenario tracking
     void beginScenario(NavScenarioType type);
     void endScenario();
-    bool isScenarioActive() const { return m_activeScenario != SCENARIO_NONE; }
+    bool isScenarioActive() const;
     
     // Log navigation events with minimal overhead
     void logEvent(NavEventType type, qint16 index = -1);
@@ -90,6 +91,9 @@ private:
     // Prevent copying
     Q_DISABLE_COPY(CustomNavLogger)
     
+    // Add this method
+    void flushLogsNoLock();  // Internal version that assumes mutex is already locked
+    
     // Scenario state
     NavScenarioType m_activeScenario = SCENARIO_NONE;
     QElapsedTimer m_scenarioTimer;
@@ -104,7 +108,7 @@ private:
     int m_paramCount;            
     
     // Thread safety for logging
-    QMutex m_logMutex;
+    mutable QMutex m_logMutex;
     
     // Metrics data
     int m_nodeCount = 0;
