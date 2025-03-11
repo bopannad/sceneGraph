@@ -54,6 +54,7 @@ public:
         quint8 type;             // Hash of param name (avoid string storage)
         qint32 value;            // Integer value
         float floatValue;        // Float value alternative
+        quint32 timestamp;       // Match with event timestamp
     };
 
     static CustomNavLogger& instance();
@@ -65,8 +66,14 @@ public:
     
     // Log navigation events with minimal overhead
     void logEvent(NavEventType type, qint16 index = -1);
-    void logEventWithParam(NavEventType type, qint16 index, const char* paramName, qint32 value);
-    void logEventWithParam(NavEventType type, qint16 index, const char* paramName, float value);
+    
+    // Update parameter logging methods with explicit types
+    void logEventWithParamInt(NavEventType type, qint16 index, const char* paramName, qint32 value);
+    void logEventWithParamFloat(NavEventType type, qint16 index, const char* paramName, float value);
+    
+    // Remove ambiguous overloads
+    // void logEventWithParam(NavEventType type, qint16 index, const char* paramName, qint32 value);
+    // void logEventWithParam(NavEventType type, qint16 index, const char* paramName, float value);
     
     // Log position calculations
     void logPosition(const char* checkpoint, qreal x, qreal y, qint16 index = -1);
@@ -138,9 +145,14 @@ private:
         CustomNavLogger::instance().logEvent(type, idx); \
     }
 
+// Fix macro to properly check floating point type
 #define NAV_LOG_PARAM(type, idx, name, value) \
     if (CustomNavLogger::instance().isEnabled()) { \
-        CustomNavLogger::instance().logEventWithParam(type, idx, name, value); \
+        if (sizeof(value) == sizeof(double) || sizeof(value) == sizeof(float)) { \
+            CustomNavLogger::instance().logEventWithParamFloat(type, idx, name, static_cast<float>(value)); \
+        } else { \
+            CustomNavLogger::instance().logEventWithParamInt(type, idx, name, static_cast<qint32>(value)); \
+        } \
     }
 
 #define NAV_LOG_POS(checkpoint, x, y, idx) \

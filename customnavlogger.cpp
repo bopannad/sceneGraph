@@ -124,100 +124,83 @@ void CustomNavLogger::logEvent(NavEventType type, qint16 index)
         return;
     }
     
+    quint32 timestamp = m_scenarioTimer.elapsed();
+    
     // Use fixed-size circular buffer (no allocations)
     int eventIndex = m_eventCount % MAX_EVENTS;
     
-    // Record the event
+    // Record the event with timestamp
     m_events[eventIndex].type = type;
     m_events[eventIndex].scenario = m_activeScenario;
     m_events[eventIndex].index = index;
-    m_events[eventIndex].timestamp = m_scenarioTimer.elapsed();
+    m_events[eventIndex].timestamp = timestamp;
     
     m_eventCount++;
 }
 
-void CustomNavLogger::logEventWithParam(NavEventType type, qint16 index, const char* paramName, qint32 value)
+void CustomNavLogger::logEventWithParamInt(NavEventType type, qint16 index, const char* paramName, qint32 value)
 {
-    if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
+    if (!m_enabled) return;
     
     QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
-    // First log the event while under the same lock
-    if (m_eventCount < MAX_EVENTS) {
-        int eventIndex = m_eventCount % MAX_EVENTS;
-        m_events[eventIndex].type = type;
-        m_events[eventIndex].scenario = m_activeScenario;
-        m_events[eventIndex].index = index;
-        m_events[eventIndex].timestamp = m_scenarioTimer.elapsed();
-        m_eventCount++;
+    quint32 timestamp = m_scenarioTimer.elapsed();
+    
+    if (m_paramCount < MAX_PARAMS) {
+        NavParam& param = m_params[m_paramCount++];
+        param.type = qHash(paramName) & 0xFF;  // Store hash of param name
+        param.value = value;
+        param.timestamp = timestamp;
     }
     
-    // Then add parameter if there's space
-    if (m_paramCount >= MAX_PARAMS) {
-        qWarning() << "Parameter buffer full, dropping param:" << paramName;
-        return;
-    }
-    
-    int paramIndex = m_paramCount % MAX_PARAMS;
-    m_params[paramIndex].type = qChecksum(paramName, qstrlen(paramName)) % 255;
-    m_params[paramIndex].value = value;
-    m_params[paramIndex].floatValue = 0.0f;
-    
-    m_paramCount++;
+    logEvent(type, index);
 }
 
-void CustomNavLogger::logEventWithParam(NavEventType type, qint16 index, const char* paramName, float value)
+void CustomNavLogger::logEventWithParamFloat(NavEventType type, qint16 index, const char* paramName, float value) 
 {
-    if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
+    if (!m_enabled) return;
     
     QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
-    // Log event under same lock
-    if (m_eventCount < MAX_EVENTS) {
-        int eventIndex = m_eventCount % MAX_EVENTS;
-        m_events[eventIndex].type = type;
-        m_events[eventIndex].scenario = m_activeScenario;
-        m_events[eventIndex].index = index;
-        m_events[eventIndex].timestamp = m_scenarioTimer.elapsed();
-        m_eventCount++;
+    quint32 timestamp = m_scenarioTimer.elapsed();
+    
+    if (m_paramCount < MAX_PARAMS) {
+        NavParam& param = m_params[m_paramCount++];
+        param.type = qHash(paramName) & 0xFF;  // Store hash of param name
+        param.value = 0;
+        param.floatValue = value;
+        param.timestamp = timestamp;
     }
     
-    // Add parameter if there's space
-    if (m_paramCount >= MAX_PARAMS) {
-        qWarning() << "Parameter buffer full, dropping param:" << paramName;
-        return;
-    }
-    
-    int paramIndex = m_paramCount % MAX_PARAMS;
-    m_params[paramIndex].type = qChecksum(paramName, qstrlen(paramName)) % 255;
-    m_params[paramIndex].value = 0;
-    m_params[paramIndex].floatValue = value;
-    
-    m_paramCount++;
+    logEvent(type, index);
 }
 
 void CustomNavLogger::logPosition(const char* checkpoint, qreal x, qreal y, qint16 index)
 {
     if (!m_enabled || m_activeScenario == SCENARIO_NONE) return;
     
-    // Log generic position event
+    quint32 timestamp = m_scenarioTimer.elapsed();
+    
+    // Log position event first
     logEvent(NAV_CALC_POS, index);
     
     QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
-    // Add X coordinate
-    int paramIndex = m_paramCount % MAX_PARAMS;
-    m_params[paramIndex].type = qChecksum(checkpoint, qstrlen(checkpoint)) % 255;
-    m_params[paramIndex].value = 0;
-    m_params[paramIndex].floatValue = static_cast<float>(x);
-    m_paramCount++;
+    // Log X coordinate first
+    if (m_paramCount < MAX_PARAMS) {
+        NavParam& param = m_params[m_paramCount++];
+        param.type = 1; // X coordinate marker
+        param.floatValue = static_cast<float>(x);
+        param.timestamp = timestamp;
+    }
     
-    // Add Y coordinate
-    paramIndex = m_paramCount % MAX_PARAMS;
-    m_params[paramIndex].type = 0; // marker for Y component of previous param
-    m_params[paramIndex].value = 0;
-    m_params[paramIndex].floatValue = static_cast<float>(y);
-    m_paramCount++;
+    // Log Y coordinate second (if non-zero)
+    if (y != 0.0 && m_paramCount < MAX_PARAMS) {
+        NavParam& param = m_params[m_paramCount++];
+        param.type = 2; // Y coordinate marker
+        param.floatValue = static_cast<float>(y);
+        param.timestamp = timestamp;
+    }
 }
 
 void CustomNavLogger::logBoundsCheck(const char* boundType, qreal value, qreal min, qreal max, qreal result)
@@ -229,11 +212,14 @@ void CustomNavLogger::logBoundsCheck(const char* boundType, qreal value, qreal m
     
     QMutexLocker locker(m_threadSafetyEnabled ? &m_logMutex : nullptr);
     
+    quint32 timestamp = m_scenarioTimer.elapsed();
+    
     // Add value param
     int paramIndex = m_paramCount % MAX_PARAMS;
     m_params[paramIndex].type = qChecksum(boundType, qstrlen(boundType)) % 255;
     m_params[paramIndex].value = 0;
     m_params[paramIndex].floatValue = static_cast<float>(value);
+    m_params[paramIndex].timestamp = timestamp;
     m_paramCount++;
     
     // Add min param
@@ -241,6 +227,7 @@ void CustomNavLogger::logBoundsCheck(const char* boundType, qreal value, qreal m
     m_params[paramIndex].type = 1; // min marker
     m_params[paramIndex].value = 0;
     m_params[paramIndex].floatValue = static_cast<float>(min);
+    m_params[paramIndex].timestamp = timestamp;
     m_paramCount++;
     
     // Add max param
@@ -248,6 +235,7 @@ void CustomNavLogger::logBoundsCheck(const char* boundType, qreal value, qreal m
     m_params[paramIndex].type = 2; // max marker
     m_params[paramIndex].value = 0;
     m_params[paramIndex].floatValue = static_cast<float>(max);
+    m_params[paramIndex].timestamp = timestamp;
     m_paramCount++;
     
     // Add result param
@@ -255,6 +243,7 @@ void CustomNavLogger::logBoundsCheck(const char* boundType, qreal value, qreal m
     m_params[paramIndex].type = 3; // result marker
     m_params[paramIndex].value = 0;
     m_params[paramIndex].floatValue = static_cast<float>(result);
+    m_params[paramIndex].timestamp = timestamp;
     m_paramCount++;
 }
 
@@ -304,10 +293,39 @@ void CustomNavLogger::flushLogsNoLock()
     // Output detailed event timeline
     qDebug() << "  Timeline:";
     
+    // Create lookup for params with proper timestamp matching
+    QMap<quint32, QStringList> eventParams;
+    for (int i = 0; i < m_paramCount; i++) {
+        NavParam &param = m_params[i];
+        QString value;
+        
+        // Format values according to type
+        if (param.type == 1) { // X coordinate
+            value = QString::number(param.floatValue, 'f', 2);
+        }
+        else if (param.type == 2) { // Y coordinate
+            value = QString::number(param.floatValue, 'f', 2);
+        }
+        else {
+            // For other parameters
+            if (param.value != 0) {
+                value = QString::number(param.value);
+            } else {
+                value = QString::number(param.floatValue, 'f', 2);
+            }
+        }
+        
+        // Only add non-empty values
+        if (!value.isEmpty()) {
+            eventParams[param.timestamp].append(value);
+        }
+    }
+    
     // Limit output to prevent console flooding
     int outputLimit = qMin(m_eventCount, MAX_EVENTS);
     int start = (m_eventCount > MAX_EVENTS) ? (m_eventCount - MAX_EVENTS) : 0;
     
+    // Output events with properly formatted parameters
     for (int i = start; i < m_eventCount && (i - start) < outputLimit; i++) {
         int idx = i % MAX_EVENTS;
         NavEvent &evt = m_events[idx];
@@ -334,7 +352,13 @@ void CustomNavLogger::flushLogsNoLock()
         }
         
         QString indexStr = (evt.index >= 0) ? QString::number(evt.index) : "-";
-        qDebug().nospace() << "    " << evt.timestamp << "ms: " << eventName 
-                 << " idx:" << indexStr;
+        QString paramsStr;
+        if (eventParams.contains(evt.timestamp)) {
+            paramsStr = " [" + eventParams[evt.timestamp].join(", ") + "]";
+        }
+        
+        qDebug().nospace() << "    " << evt.timestamp << "ms: \"" << eventName 
+                          << "\" idx:\"" << indexStr << "\"" 
+                          << (paramsStr.isEmpty() ? "" : paramsStr);
     }
 }

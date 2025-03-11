@@ -1306,6 +1306,11 @@ void CustomImageListView::navigateRight()
         return;
     }
 
+    // Start navigation scenario
+    CustomNavLogger::instance().beginScenario(CustomNavLogger::SCENARIO_NAV_RIGHT);
+    NAV_LOG_EVENT(CustomNavLogger::NAV_RIGHT_START);
+    NAV_LOG_PARAM(CustomNavLogger::NAV_RIGHT_START, m_currentIndex, "fromIndex", m_currentIndex);
+
     QString currentCategory = m_imageData[m_currentIndex].category;
     int nextIndex = m_currentIndex + 1;
     
@@ -1317,11 +1322,17 @@ void CustomImageListView::navigateRight()
         
         CategoryDimensions dims = getDimensionsForCategory(currentCategory);
         
+        // Log old position before change
+        NAV_LOG_POS("PreMove", getCategoryContentX(currentCategory), m_contentY, m_currentIndex);
+        
         setCurrentIndex(nextIndex);
+        
+        NAV_LOG_EVENT_IDX(CustomNavLogger::NAV_INDEX_CHANGED, nextIndex);
+        
         ensureFocus();
         updateCurrentCategory();
         
-        // Calculate scroll position
+        // Calculate scroll position with bounds check logging
         int itemsBeforeInCategory = 0;
         for (int i = 0; i < nextIndex; i++) {
             if (m_imageData[i].category == currentCategory) {
@@ -1332,13 +1343,21 @@ void CustomImageListView::navigateRight()
         qreal targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
         targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
         
-        // Single animation call
+        // Log position calculation
+        NAV_LOG_PARAM(CustomNavLogger::NAV_CALC_POS, nextIndex, "targetX", targetX);
+        
+        
+        // Single animation call with logging
         animateScroll(currentCategory, targetX);
         
         ensureIndexVisible(nextIndex);
         update();
         return;
     }
+
+    // Log navigation end if we reach category boundary
+    NAV_LOG_EVENT(CustomNavLogger::NAV_RIGHT_END);
+    CustomNavLogger::instance().endScenario();
 }
 
 void CustomImageListView::navigateUp()
@@ -2200,6 +2219,11 @@ void CustomImageListView::animateScroll(const QString& category, qreal targetX)
     // Store category name as property on the animation for callbacks
     animation->setProperty("category", category);
     
+    // Begin navigation scenario and log animation start
+    CustomNavLogger::instance().beginScenario(CustomNavLogger::SCENARIO_NAV_RIGHT);
+    NAV_LOG_EVENT(CustomNavLogger::NAV_ANIM_START);
+    NAV_LOG_PARAM(CustomNavLogger::NAV_ANIM_START, -1, "targetX", targetX);
+    
     // Connect signals with explicit tracking
     connect(animation, &QPropertyAnimation::valueChanged, 
             this, &CustomImageListView::onScrollAnimationValueChanged, 
@@ -2213,17 +2237,21 @@ void CustomImageListView::animateScroll(const QString& category, qreal targetX)
     // Start the animation outside any locks
     qDebug() << "Starting animation for" << category << "from" 
              << getCategoryContentX(category) << "to" << targetX;
+             
+    NAV_LOG_POS("AnimStart", getCategoryContentX(category), 0, -1);
     animation->start();
 }
 
 void CustomImageListView::stopCurrentAnimation()
 {
-    // Stop all category animations
+    // Log animation abort for each running animation
     for (QPropertyAnimation* anim : m_categoryAnimations.values()) {
-        if (anim->state() == QPropertyAnimation::Running) {
+        if (anim && anim->state() == QPropertyAnimation::Running) {
+            NAV_LOG_EVENT(CustomNavLogger::NAV_ANIM_ABORTED);
             anim->stop();
         }
     }
+    // ...existing code...
 }
 
 void CustomImageListView::setStartPositionX(qreal x)
@@ -2438,6 +2466,9 @@ void CustomImageListView::onScrollAnimationValueChanged(const QVariant &value)
     if (qAbs(newValue - anim->endValue().toReal()) < 0.001) {
         qDebug() << "Animation for" << category << "reached end value:" << newValue;
     }
+
+    // Add position logging during animation
+    NAV_LOG_POS("AnimUpdate", newValue, 0.0, -1);
 }
 
 void CustomImageListView::onAnimationFinished() 
