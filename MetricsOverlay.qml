@@ -36,12 +36,20 @@ Rectangle {
             visible: false  // Initially hidden, Timer will control visibility
             text: "Active Textures: 0"  // Default text, Timer will update
         }
+
+        Text {
+            id: textureMemoryText
+            color: "#ffffff"
+            font.pixelSize: 12
+            visible: false  // Initially hidden, Timer will control visibility
+            text: "Texture Memory: 0 MB"  // Default text, Timer will update
+        }
         
         Text {
             id: controlText
             color: "#808080"
             font.pixelSize: 10
-            text: "Press 'N' for nodes\nPress 'T' for textures"
+            text: "Press 'N' for nodes\nPress 'T' for textures\nPress 'M' for memory"
         }
     }
     
@@ -62,6 +70,13 @@ Rectangle {
                 if (imageListView.enableTextureMetrics) {
                     textureCountText.text = "Active Textures: " + imageListView.textureCount
                 }
+
+                // Update memory metrics using the property instead of the function
+                textureMemoryText.visible = imageListView.enableTextureMemoryMetrics
+                if (imageListView.enableTextureMemoryMetrics) {
+                    var memoryMB = (imageListView.textureMemoryUsage / (1024 * 1024)).toFixed(2)
+                    textureMemoryText.text = "Texture Memory: " + memoryMB + " MB"
+                }
             }
         }
     }
@@ -73,6 +88,9 @@ Rectangle {
             event.accepted = true
         } else if (event.key === Qt.Key_T && imageListView) {
             imageListView.enableTextureMetrics = !imageListView.enableTextureMetrics
+            event.accepted = true
+        } else if (event.key === Qt.Key_M && imageListView) {
+            imageListView.enableTextureMemoryMetrics = !imageListView.enableTextureMemoryMetrics
             event.accepted = true
         }
     }

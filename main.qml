@@ -144,6 +144,9 @@ Window {
                 } else if (event.key === Qt.Key_T) {
                     enableTextureMetrics = !enableTextureMetrics
                     event.accepted = true
+                } else if (event.key === Qt.Key_R) {
+                    enableTextureMemoryMetrics = !enableTextureMemoryMetrics
+                    event.accepted = true
                 }
                 // Don't accept other keys, let them propagate
             }

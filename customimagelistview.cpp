@@ -2598,6 +2598,8 @@ void CustomImageListView::abortCurrentNavigationScenario()
     update();
 }
 
+// o1: For a “quick and dirty” metric, especially on an embedded device like a Raspberry Pi, your snippet is good enough to get an estimate. If you only use typical image textures in RGBA format (for example, if you load them via QQuickTextureFactory or a typical QImage -> QSGTexture path), it’s a perfectly valid approximation.
+// To be more precise, you would ideally check the actual QSGTexture format in use, or any platform-specific info, to ensure you aren’t overcounting or undercounting.
 qint64 CustomImageListView::calculateTextureMemoryUsage() const
 {
     qint64 totalMemory = 0;
@@ -2611,14 +2613,3 @@ qint64 CustomImageListView::calculateTextureMemoryUsage() const
     return totalMemory;
 }
 
-void CustomImageListView::updateMetricCounts(int nodes, int textures, qint64 textureMemory)
-{
-    if (m_totalNodeCount != nodes || m_textureCount != textures || m_textureMemoryUsage != textureMemory) {
-        m_totalNodeCount = nodes;
-        m_textureCount = textures;
-        m_textureMemoryUsage = textureMemory;
-        qDebug() << "Metrics updated - Nodes:" << m_totalNodeCount 
-                 << "Textures:" << m_textureCount
-                 << "Texture Memory:" << m_textureMemoryUsage << "bytes";
-    }
-}

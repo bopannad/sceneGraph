@@ -92,6 +92,7 @@ class CustomImageListView : public QQuickItem
     Q_PROPERTY(bool enableNodeMetrics READ enableNodeMetrics WRITE setEnableNodeMetrics NOTIFY enableNodeMetricsChanged)
     Q_PROPERTY(bool enableTextureMetrics READ enableTextureMetrics WRITE setEnableTextureMetrics NOTIFY enableTextureMetricsChanged)
     Q_PROPERTY(bool enableTextureMemoryMetrics READ enableTextureMemoryMetrics WRITE setEnableTextureMemoryMetrics NOTIFY enableTextureMemoryMetricsChanged)
+    Q_PROPERTY(qint64 textureMemoryUsage READ textureMemoryUsage NOTIFY textureMemoryUsageChanged)
 
 private:
     // Move ImageData struct definition to the top of the private section
@@ -345,12 +346,19 @@ public:
     bool enableTextureMemoryMetrics() const { return m_enableTextureMemoryMetrics; }
     void setEnableTextureMemoryMetrics(bool enable);
 
+    // Add getter for texture memory usage
+    qint64 textureMemoryUsage() const { return m_textureMemoryUsage; }
+
     // Add method to update metrics
     void updateMetricCounts(int nodes, int textures, qint64 textureMemory) {
+        bool changed = false;
         if (m_totalNodeCount != nodes || m_textureCount != textures || m_textureMemoryUsage != textureMemory) {
             m_totalNodeCount = nodes;
             m_textureCount = textures;
-            m_textureMemoryUsage = textureMemory;
+            if (m_textureMemoryUsage != textureMemory) {
+                m_textureMemoryUsage = textureMemory;
+                emit textureMemoryUsageChanged();
+            }
             qDebug() << "Metrics updated - Nodes:" << m_totalNodeCount 
                      << "Textures:" << m_textureCount
                      << "Texture Memory:" << m_textureMemoryUsage << "bytes";
@@ -360,8 +368,8 @@ public:
     // Add diagnostic method
     Q_INVOKABLE void dumpDynamicProperties();
 
-    // Add method to calculate texture memory usage
-    qint64 calculateTextureMemoryUsage() const;
+    // Add Q_INVOKABLE to make it callable from QML
+    Q_INVOKABLE qint64 calculateTextureMemoryUsage() const;
 
 signals:
     void countChanged();
@@ -390,6 +398,7 @@ signals:
     void enableNodeMetricsChanged();
     void enableTextureMetricsChanged();
     void enableTextureMemoryMetricsChanged();
+    void textureMemoryUsageChanged();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
