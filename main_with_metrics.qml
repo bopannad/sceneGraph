@@ -12,8 +12,8 @@ Window {
 
     // Add helper function at Window level
     function isBackKey(key) {
-        return key === Qt.Key_Back || 
-               key === Qt.Key_Escape || 
+        return key === Qt.Key_Back ||
+               key === Qt.Key_Escape ||
                key === Qt.Key_Backspace
     }
 
@@ -123,7 +123,7 @@ Window {
     // Component definition for the gallery view
     Component {
         id: galleryComponent
-        
+
         CustomImageListView {
             anchors.fill: parent
             jsonSource: "qrc:/data/embeddedHubMenu.json"
@@ -144,6 +144,9 @@ Window {
                 } else if (event.key === Qt.Key_T) {
                     enableTextureMetrics = !enableTextureMetrics
                     event.accepted = true
+                } else if (event.key === Qt.Key_R) {
+                    enableTextureMemoryMetrics = !enableTextureMemoryMetrics
+                    event.accepted = true
                 }
                 // Don't accept other keys, let them propagate
             }
@@ -155,12 +158,12 @@ Window {
                         console.log("Processing OK action with URL:", url)
                         // Add your content playback logic here
                         break
-                        
+
                     case "info":
                         console.log("Processing info action with URL:", url)
                         // Add your info display logic here
                         break
-                        
+
                     default:
                         console.log("Unknown action type:", action)
                         break
@@ -168,7 +171,8 @@ Window {
             }
 
             onAssetFocused: function(assetData) {
-                console.log("Asset focused, complete data:", JSON.stringify(assetData, null, 2))
+                console.log("Asset focused changed")
+                //console.log("Asset focused, complete data:", JSON.stringify(assetData, null, 2))
                 // Now you have access to all JSON fields exactly as they were in the source
             }
 
@@ -194,15 +198,17 @@ Window {
         }
     }
 
-//    // Metrics overlay
-//    MetricsOverlay {
-//        id: metricsOverlay
-//        imageListView: viewLoader.item
-//        anchors.right: parent.right
-//        anchors.top: parent.top
-//        anchors.margins: 10
-//        enabled: viewLoader.item ? true : false
-//        z: 1000
-//        visible: viewLoader.item ? true : false
-//    }
+    // Metrics overlay
+    MetricsOverlay {
+        id: metricsOverlay
+        imageListView: viewLoader.item
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 10
+        enabled: viewLoader.item ? true : false
+        z: 1000
+        visible: viewLoader.item ? true : false
+    }
+
+    
 }

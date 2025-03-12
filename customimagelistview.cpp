@@ -919,10 +919,9 @@ QSGNode* CustomImageListView::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeD
         if (m_enableTextureMetrics) {
             int realTextureCount = countTotalTextures(parentNode);
             qDebug() << "Scene graph texture metrics - Textures:" << realTextureCount;
-            updateMetricCounts(realNodeCount, realTextureCount);
+            updateMetricCounts(realNodeCount, realTextureCount, m_enableTextureMemoryMetrics ? calculateTextureMemoryUsage() : 0);
         } else {
-            
-            updateMetricCounts(realNodeCount, 0);
+            updateMetricCounts(realNodeCount, 0, 0);
         }
     }
     
@@ -2281,6 +2280,15 @@ void CustomImageListView::setEnableTextureMetrics(bool enable)
     }
 }
 
+void CustomImageListView::setEnableTextureMemoryMetrics(bool enable)
+{
+    if (m_enableTextureMemoryMetrics != enable) {
+        m_enableTextureMemoryMetrics = enable;
+        emit enableTextureMemoryMetricsChanged();
+        update();
+    }
+}
+
 void CustomImageListView::handleContentPositionChange()
 {
     // Don't proceed if we're being destroyed
@@ -2590,3 +2598,27 @@ void CustomImageListView::abortCurrentNavigationScenario()
     update();
 }
 
+qint64 CustomImageListView::calculateTextureMemoryUsage() const
+{
+    qint64 totalMemory = 0;
+    for (const auto& node : m_nodes) {
+        if (node.texture) {
+            QSize size = node.texture->textureSize();
+            int bytesPerPixel = 4; // Assuming RGBA format
+            totalMemory += size.width() * size.height() * bytesPerPixel;
+        }
+    }
+    return totalMemory;
+}
+
+void CustomImageListView::updateMetricCounts(int nodes, int textures, qint64 textureMemory)
+{
+    if (m_totalNodeCount != nodes || m_textureCount != textures || m_textureMemoryUsage != textureMemory) {
+        m_totalNodeCount = nodes;
+        m_textureCount = textures;
+        m_textureMemoryUsage = textureMemory;
+        qDebug() << "Metrics updated - Nodes:" << m_totalNodeCount 
+                 << "Textures:" << m_textureCount
+                 << "Texture Memory:" << m_textureMemoryUsage << "bytes";
+    }
+}
