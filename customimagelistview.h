@@ -91,6 +91,7 @@ class CustomImageListView : public QQuickItem
     Q_PROPERTY(int textureCount READ textureCount CONSTANT)  // Simplified read-only property
     Q_PROPERTY(bool enableNodeMetrics READ enableNodeMetrics WRITE setEnableNodeMetrics NOTIFY enableNodeMetricsChanged)
     Q_PROPERTY(bool enableTextureMetrics READ enableTextureMetrics WRITE setEnableTextureMetrics NOTIFY enableTextureMetricsChanged)
+    Q_PROPERTY(bool enableTextureMemoryMetrics READ enableTextureMemoryMetrics WRITE setEnableTextureMemoryMetrics NOTIFY enableTextureMemoryMetricsChanged)
 
 private:
     // Move ImageData struct definition to the top of the private section
@@ -139,6 +140,7 @@ private:
     QMutex m_loadMutex;
     bool m_enableNodeMetrics = false;
     bool m_enableTextureMetrics = false;
+    bool m_enableTextureMemoryMetrics = false;
 
     // Add new members for UI settings
     int m_titleHeight = 25; // Reduced from 30 to 25
@@ -200,6 +202,7 @@ private:
     int m_nodeCount = 0;
     int m_totalNodeCount = 0;  // Add this to store total node count
     QAtomicInt m_textureCount = 0;  // Add this to store texture count
+    qint64 m_textureMemoryUsage = 0;  // Add this to store texture memory usage
 
     // Add helper method to count nodes recursively
     int countNodes(QSGNode *root) {
@@ -339,18 +342,26 @@ public:
     bool enableTextureMetrics() const { return m_enableTextureMetrics; }
     void setEnableTextureMetrics(bool enable);
 
+    bool enableTextureMemoryMetrics() const { return m_enableTextureMemoryMetrics; }
+    void setEnableTextureMemoryMetrics(bool enable);
+
     // Add method to update metrics
-    void updateMetricCounts(int nodes, int textures) {
-        if (m_totalNodeCount != nodes || m_textureCount != textures) {
+    void updateMetricCounts(int nodes, int textures, qint64 textureMemory) {
+        if (m_totalNodeCount != nodes || m_textureCount != textures || m_textureMemoryUsage != textureMemory) {
             m_totalNodeCount = nodes;
             m_textureCount = textures;
+            m_textureMemoryUsage = textureMemory;
             qDebug() << "Metrics updated - Nodes:" << m_totalNodeCount 
-                     << "Textures:" << m_textureCount;
+                     << "Textures:" << m_textureCount
+                     << "Texture Memory:" << m_textureMemoryUsage << "bytes";
         }
     }
 
     // Add diagnostic method
     Q_INVOKABLE void dumpDynamicProperties();
+
+    // Add method to calculate texture memory usage
+    qint64 calculateTextureMemoryUsage() const;
 
 signals:
     void countChanged();
@@ -378,6 +389,7 @@ signals:
     void assetFocused(const QJsonObject& assetData);  // Modified to pass complete JSON object
     void enableNodeMetricsChanged();
     void enableTextureMetricsChanged();
+    void enableTextureMemoryMetricsChanged();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
