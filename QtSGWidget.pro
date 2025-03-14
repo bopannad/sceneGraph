@@ -15,7 +15,8 @@ SOURCES += \
     verify_resources.cpp \
     texturemanager.cpp \
     texturebuffer.cpp \
-    customnavlogger.cpp
+    customnavlogger.cpp \
+    memoryusage.cpp
 
 HEADERS += \
     customrectangle.h \
@@ -24,7 +25,8 @@ HEADERS += \
     verify_resources.h \
     texturemanager.h \
     texturebuffer.h \
-    customnavlogger.h
+    customnavlogger.h \
+    memoryusage.h
 
 # Resources
 RESOURCES += \

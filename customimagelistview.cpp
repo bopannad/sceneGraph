@@ -2600,6 +2600,7 @@ void CustomImageListView::abortCurrentNavigationScenario()
 
 // o1: For a “quick and dirty” metric, especially on an embedded device like a Raspberry Pi, your snippet is good enough to get an estimate. If you only use typical image textures in RGBA format (for example, if you load them via QQuickTextureFactory or a typical QImage -> QSGTexture path), it’s a perfectly valid approximation.
 // To be more precise, you would ideally check the actual QSGTexture format in use, or any platform-specific info, to ensure you aren’t overcounting or undercounting.
+// currently m_nodes is flat. If you have a more complex scene graph structure, you might need to traverse the scene graph to get a more accurate count. or use already collected qSet in the textureCount 
 qint64 CustomImageListView::calculateTextureMemoryUsage() const
 {
     qint64 totalMemory = 0;
@@ -2613,3 +2614,24 @@ qint64 CustomImageListView::calculateTextureMemoryUsage() const
     return totalMemory;
 }
 
+// this is not used for now. if scenegraph becomes complex and textures are nested, then we should use this
+qint64 CustomImageListView::calculateTextureMemoryFromSet(const QSet<QSGTexture*>& textureSet) const
+{
+    qint64 totalMemory = 0;
+    
+    // Calculate memory for each unique texture
+    for (QSGTexture* texture : textureSet) {
+        if (!texture) continue;
+
+        // Get base size of texture
+        QSize size = texture->textureSize();
+        
+        // Default to 4 bytes per pixel (32-bit RGBA)
+        int bytesPerPixel = 4;
+        
+        // Accumulate memory usage for this texture
+        totalMemory += size.width() * size.height() * bytesPerPixel;
+    }
+    
+    return totalMemory;
+}

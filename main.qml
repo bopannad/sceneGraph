@@ -25,7 +25,10 @@ Window {
 
         // Key handler for root focus scope
         Keys.onPressed: {
-            console.log("Root focus scope received key:", event.key)
+            console.log("Root focus scope received key:", event.key,
+                       "Widget metrics focus:", widgetMetrics.activeFocus,
+                       "App metrics focus:", appMetrics.activeFocus,
+                       "Gallery has focus:", viewLoader.item ? viewLoader.item.activeFocus : false)
             if (event.key === Qt.Key_Space) {
             console.log("Space key pressed in root focus scope")
             // Add any additional logic for space key here
@@ -36,6 +39,9 @@ Window {
                 event.accepted = true
                 console.log("Gallery unloaded due to back key in root focus scope")
             }
+            } else if (event.key === Qt.Key_S) {
+                appMetrics.showMetrics = !appMetrics.showMetrics
+                event.accepted = true
             }
         }
 
@@ -136,7 +142,7 @@ Window {
             Keys.onPressed: {
                 console.log("Gallery received key:", event.key)
                 if (event.key === Qt.Key_M) {
-                    metricsOverlay.enabled = !metricsOverlay.enabled
+                    widgetMetrics.enabled = !widgetMetrics.enabled
                     event.accepted = true
                 } else if (event.key === Qt.Key_N) {
                     enableNodeMetrics = !enableNodeMetrics
@@ -148,7 +154,6 @@ Window {
                     enableTextureMemoryMetrics = !enableTextureMemoryMetrics
                     event.accepted = true
                 }
-                // Don't accept other keys, let them propagate
             }
 
             onLinkActivated: function(action, url) {
@@ -198,17 +203,60 @@ Window {
         }
     }
 
-    // Metrics overlay
-    MetricsOverlay {
-        id: metricsOverlay
+    // Widget metrics overlay - keep this dependent on loader
+    WidgetMetricsOverlay {
+        id: widgetMetrics
         imageListView: viewLoader.item
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: 10
-        enabled: viewLoader.item ? true : false
+        anchors {
+            right: parent.right
+            top: parent.top
+            margins: 20
+            rightMargin: 30
+        }
         z: 1000
-        visible: viewLoader.item ? true : false
+        enabled: viewLoader.item ? true : false
     }
 
+    // App metrics overlay - remove loader dependency
+    AppMetricsOverlay {
+        id: appMetrics
+        anchors {
+            right: parent.right
+            top: widgetMetrics.bottom
+            margins: 20
+            rightMargin: 30
+            topMargin: 10
+        }
+        z: 1000
+        enabled: true  // Always enabled
+        visible: enabled  // Always visible when enabled
+        showMetrics: false  // Toggle with S key
+    }
+
+    // Test objects loader
+    Loader {
+        id: testLoader
+        active: viewLoader.sourceComponent ? true : false
+        sourceComponent: Column {
+            id: testColumn
+            anchors.left: parent.left
+            anchors.top: parent.top
+            spacing: 10
+            Repeater {
+                model: 10
+                delegate: Row {
+                    spacing: 10
+                    Repeater {
+                        model: 50
+                        delegate: Rectangle {
+                            width: 50
+                            height: 50
+                            color: "red"
+                        }
+                    }
+                }
+            }
+        }
+    }
     
 }

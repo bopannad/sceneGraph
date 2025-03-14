@@ -1,9 +1,15 @@
 #include "memoryusage.h"
 #include <malloc.h>
 #include <QDebug>
+#include <QCoreApplication>
+#include <QStack>
+#include <QQuickWindow>
+#include <QQuickView>
+#include <QGuiApplication>
+#include <QQuickItem>
 
 MemoryUsage::MemoryUsage(QObject *parent)
-    : QObject(parent), m_totalAllocated(0), m_totalFree(0)
+    : QObject(parent), m_totalAllocated(0), m_totalFree(0), m_totalObjects(0), m_totalObjectsAlt(0)
 {
 }
 
@@ -30,6 +36,75 @@ void MemoryUsage::updateMemoryStats()
     }
 #endif
     emit memoryStatsUpdated();
+    
+    // Also update QObject count when updating memory stats
+    countAllQObjects();
+    countAllQObjectsUsingFindChildren();
+}
+
+void MemoryUsage::countAllQObjects()
+{
+    int count = 0;
+    QStack<QObject*> stack;
+    stack.push(QCoreApplication::instance());
+
+    while (!stack.isEmpty()) {
+        QObject* current = stack.pop();
+        ++count;
+
+        const auto children = current->children();
+        for (QObject* child : children) {
+            stack.push(child);
+        }
+    }
+
+    if (m_totalObjects != count) {
+        m_totalObjects = count;
+        emit objectCountChanged();
+    }
+}
+
+void MemoryUsage::countAllQObjectsUsingFindChildren()
+{
+QList<QObject*> allObjects;
+QWindowList windows = QGuiApplication::topLevelWindows();
+for (QWindow* window : windows) {
+    allObjects.append(window); // Add the window itself
+    
+    if (QQuickWindow* quickWindow = qobject_cast<QQuickWindow*>(window)) {
+        // Add the quick window
+        allObjects.append(quickWindow);
+        
+        if (QQuickItem* rootItem = quickWindow->contentItem()) {
+            // Add the root item
+            allObjects.append(rootItem);
+            
+            // Add all child items recursively
+            QList<QQuickItem*> items = rootItem->childItems();
+            for (QQuickItem* item : items) {
+                allObjects.append(item);
+                // Get all QObject children of each item
+                allObjects.append(item->findChildren<QObject*>());
+                
+                // Recursively get all child items
+                QList<QQuickItem*> childItems = item->childItems();
+                while (!childItems.isEmpty()) {
+                    QQuickItem* childItem = childItems.takeFirst();
+                    allObjects.append(childItem);
+                    allObjects.append(childItem->findChildren<QObject*>());
+                    childItems.append(childItem->childItems());
+                }
+            }
+        }
+    }
+}
+
+int count = allObjects.size() + 1; // +1 to include the QCoreApplication instance itself
+    
+    if (m_totalObjectsAlt != count) {
+        m_totalObjectsAlt = count;
+        emit objectCountChanged();
+    }
 }
 
 QObject* MemoryUsage::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)

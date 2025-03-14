@@ -253,7 +253,7 @@ private:
 
     // Modified version using QSet instead of std::unordered_set
     int countTotalTextures(QSGNode *root) {
-        QSet<QSGTexture *> textures;
+        QSet<QSGTexture *> textures; 
         collectTextures(root, textures);
         return textures.size();
     }
@@ -370,6 +370,7 @@ public:
 
     // Add Q_INVOKABLE to make it callable from QML
     Q_INVOKABLE qint64 calculateTextureMemoryUsage() const;
+    qint64 calculateTextureMemoryFromSet(const QSet<QSGTexture*>& textureSet) const;
 
 signals:
     void countChanged();
