@@ -14,7 +14,9 @@ SOURCES += \
     customimagelistview.cpp \
     verify_resources.cpp \
     texturemanager.cpp \
-    texturebuffer.cpp
+    texturebuffer.cpp \
+    customnavlogger.cpp \
+    memoryusage.cpp
 
 HEADERS += \
     customrectangle.h \
@@ -22,7 +24,9 @@ HEADERS += \
     customimagelistview.h \
     verify_resources.h \
     texturemanager.h \
-    texturebuffer.h
+    texturebuffer.h \
+    customnavlogger.h \
+    memoryusage.h
 
 # Resources
 RESOURCES += \
@@ -72,9 +76,9 @@ linux-rasp-pi-* {
 }
 
 # For Windows
-win32 {
-    LIBS += -lssleay32 -llibeay32
-}
+#win32 {
+#    LIBS += -lssleay32 -llibeay32
+#}
 
 # Enable OpenGL ES 2.0 on embedded platforms
 android|ios|qnx {

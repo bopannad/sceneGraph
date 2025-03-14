@@ -5,6 +5,7 @@
 #include "customlistview.h"
 #include "customimagelistview.h"
 #include "verify_resources.h"
+#include "memoryusage.h"
 
 int main(int argc, char *argv[])
 {
@@ -23,7 +24,7 @@ int main(int argc, char *argv[])
     qmlRegisterType<CustomRectangle>("Custom", 1, 0, "CustomRectangle");
     qmlRegisterType<CustomListView>("Custom", 1, 0, "CustomListView");
     qmlRegisterType<CustomImageListView>("Custom", 1, 0, "CustomImageListView");
-
+    qmlRegisterSingletonType<MemoryUsage>("Custom", 1, 0, "MemoryUsage", &MemoryUsage::qmlInstance);
     QQmlApplicationEngine engine;
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
 

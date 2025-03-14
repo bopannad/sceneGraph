@@ -91,6 +91,8 @@ class CustomImageListView : public QQuickItem
     Q_PROPERTY(int textureCount READ textureCount CONSTANT)  // Simplified read-only property
     Q_PROPERTY(bool enableNodeMetrics READ enableNodeMetrics WRITE setEnableNodeMetrics NOTIFY enableNodeMetricsChanged)
     Q_PROPERTY(bool enableTextureMetrics READ enableTextureMetrics WRITE setEnableTextureMetrics NOTIFY enableTextureMetricsChanged)
+    Q_PROPERTY(bool enableTextureMemoryMetrics READ enableTextureMemoryMetrics WRITE setEnableTextureMemoryMetrics NOTIFY enableTextureMemoryMetricsChanged)
+    Q_PROPERTY(qint64 textureMemoryUsage READ textureMemoryUsage NOTIFY textureMemoryUsageChanged)
 
 private:
     // Move ImageData struct definition to the top of the private section
@@ -139,6 +141,7 @@ private:
     QMutex m_loadMutex;
     bool m_enableNodeMetrics = false;
     bool m_enableTextureMetrics = false;
+    bool m_enableTextureMemoryMetrics = false;
 
     // Add new members for UI settings
     int m_titleHeight = 25; // Reduced from 30 to 25
@@ -200,6 +203,7 @@ private:
     int m_nodeCount = 0;
     int m_totalNodeCount = 0;  // Add this to store total node count
     QAtomicInt m_textureCount = 0;  // Add this to store texture count
+    qint64 m_textureMemoryUsage = 0;  // Add this to store texture memory usage
 
     // Add helper method to count nodes recursively
     int countNodes(QSGNode *root) {
@@ -249,7 +253,7 @@ private:
 
     // Modified version using QSet instead of std::unordered_set
     int countTotalTextures(QSGNode *root) {
-        QSet<QSGTexture *> textures;
+        QSet<QSGTexture *> textures; 
         collectTextures(root, textures);
         return textures.size();
     }
@@ -260,6 +264,13 @@ private:
 
     // Add this declaration to the private section
     void animateVerticalScroll(qreal targetY);
+
+    // Add in the private methods section:
+    void connectAnimationCompletionSignals();
+    void abortCurrentNavigationScenario();
+
+    // Add this helper method for property validation
+    bool checkAndCreateDynamicProperty(const QString& propName);
 
 public:
     CustomImageListView(QQuickItem *parent = nullptr);
@@ -332,15 +343,34 @@ public:
     bool enableTextureMetrics() const { return m_enableTextureMetrics; }
     void setEnableTextureMetrics(bool enable);
 
+    bool enableTextureMemoryMetrics() const { return m_enableTextureMemoryMetrics; }
+    void setEnableTextureMemoryMetrics(bool enable);
+
+    // Add getter for texture memory usage
+    qint64 textureMemoryUsage() const { return m_textureMemoryUsage; }
+
     // Add method to update metrics
-    void updateMetricCounts(int nodes, int textures) {
-        if (m_totalNodeCount != nodes || m_textureCount != textures) {
+    void updateMetricCounts(int nodes, int textures, qint64 textureMemory) {
+        bool changed = false;
+        if (m_totalNodeCount != nodes || m_textureCount != textures || m_textureMemoryUsage != textureMemory) {
             m_totalNodeCount = nodes;
             m_textureCount = textures;
+            if (m_textureMemoryUsage != textureMemory) {
+                m_textureMemoryUsage = textureMemory;
+                emit textureMemoryUsageChanged();
+            }
             qDebug() << "Metrics updated - Nodes:" << m_totalNodeCount 
-                     << "Textures:" << m_textureCount;
+                     << "Textures:" << m_textureCount
+                     << "Texture Memory:" << m_textureMemoryUsage << "bytes";
         }
     }
+
+    // Add diagnostic method
+    Q_INVOKABLE void dumpDynamicProperties();
+
+    // Add Q_INVOKABLE to make it callable from QML
+    Q_INVOKABLE qint64 calculateTextureMemoryUsage() const;
+    qint64 calculateTextureMemoryFromSet(const QSet<QSGTexture*>& textureSet) const;
 
 signals:
     void countChanged();
@@ -368,6 +398,8 @@ signals:
     void assetFocused(const QJsonObject& assetData);  // Modified to pass complete JSON object
     void enableNodeMetricsChanged();
     void enableTextureMetricsChanged();
+    void enableTextureMemoryMetricsChanged();
+    void textureMemoryUsageChanged();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
@@ -381,6 +413,7 @@ protected:
 
 private:
     QMutex m_networkMutex;
+    QMutex m_animationMutex;  // Add this mutex
     
     // Add loadAllImages declaration with other loading-related methods
     void loadAllImages();
@@ -503,6 +536,8 @@ private slots:
     }
 
     void onNetworkError(QNetworkReply::NetworkError code) {
+        Q_UNUSED(code); // Mark parameter as intentionally unused
+        
         QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
         if (!reply) return;
         
@@ -534,17 +569,12 @@ private slots:
         }
     }
     
-    void onScrollAnimationValueChanged(const QVariant &value) {
-        QPropertyAnimation* anim = qobject_cast<QPropertyAnimation*>(sender());
-        if (!anim) return;
-        
-        // Get the category from the animation object
-        QString category = anim->property("category").toString();
-        if (category.isEmpty()) return;
-        
-        // Update the content X position for this category
-        setCategoryContentX(category, value.toReal());
-    }
+    void onScrollAnimationValueChanged(const QVariant &value);
+    void onAnimationFinished();
+
+    // Add these diagnostic slots 
+    void onAnimationValueDetected(const QVariant &value);
+    void onAnimationFinishedDetected();
 };
 
 #endif // CUSTOMIMAGELISTVIEW_H
