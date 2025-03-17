@@ -1,17 +1,17 @@
 #ifndef CUSTOMIMAGELISTVIEW_H
 #define CUSTOMIMAGELISTVIEW_H
-#include <QQmlEngine>
+#include <QUrl>
 #include <QQuickItem>
 #include <QList>
 #include <QUrl>
 #include <QQmlEngine>
 #include <QNetworkAccessManager>
 #include <QMap>
-
+#include <QSGGeometryNode>
 #include <QImage>
-#include <QSGSimpleTextureNode>
+#include "texturebuffer.h"
 #include <QSGTextureMaterial>
-
+#include <QSGOpaqueTextureMaterial>
 #include <QSGFlatColorMaterial>
 #include <QQueue>  // Add this include
 #include "texturebuffer.h"
@@ -27,43 +27,43 @@
 #include <QRunnable>
 #include <QPointer>
 #include <QFontMetrics>
-#include <QSGSimpleTextureNode>
+
 class QSGTexture;
 class QSGGeometry;
-
+#include <QNetworkReply>
 // SafeNodeDeleter definition
 class SafeNodeDeleter : public QRunnable {
     public:
         explicit SafeNodeDeleter(QSGNode* node) : m_node(node) {}
-
+        
         void run() override {
             if (m_node) {
                 delete m_node;
-    void debugLastRowVisibility(); // Add debug helper
-}
 
+        }
+        
     private:
         QSGNode* m_node;
 };
-    CategoryDimensions getDimensionsForCategory(const QString& category) const;
+    Q_PROPERTY(int textureCount READ textureCount CONSTANT)
 // SafeNodeBatchDeleter definition
 class SafeNodeBatchDeleter : public QRunnable {
     public:
         explicit SafeNodeBatchDeleter(const QList<QSGNode*>& nodes) : m_nodes(nodes) {}
-    void processSwimlaneDimensions(const QJsonObject &swimlaneObj);
+        
         void run() override {
             for (QSGNode* node : m_nodes) {
                 if (node) {
                     delete node;
-
-
+                }
+    void keyPressEvent(QKeyEvent *event) override;
             m_nodes.clear();
-
-
+        }
+        
     private:
         QList<QSGNode*> m_nodes;
 };
-                debugLastRowVisibility(); // New debugging helper
+
 class CustomImageListView : public QQuickItem
 
     Q_OBJECT
@@ -91,41 +91,41 @@ class CustomImageListView : public QQuickItem
     Q_PROPERTY(int textureCount READ textureCount CONSTANT)
     Q_PROPERTY(bool enableNodeMetrics READ enableNodeMetrics WRITE setEnableNodeMetrics NOTIFY enableNodeMetricsChanged)
     Q_PROPERTY(bool enableTextureMetrics READ enableTextureMetrics WRITE setEnableTextureMetrics NOTIFY enableTextureMetricsChanged)
-    qreal itemBottom = itemTop + itemHeight;
+        int posterWidth;
 public:
     struct NavigationPosition {
         QString category;
         int relativePosition;
         qreal scrollOffset;
     };
-    qreal viewportTop = m_contentY;
+        qreal itemSpacing;
     CustomImageListView(QQuickItem *parent = nullptr);
     ~CustomImageListView();
-    qreal viewportBottom = viewportTop + height();
+
     int count() const { return m_count; }
     void setCount(int count);
-    
+    // Member variables
     qreal itemWidth() const { return m_itemWidth; }
     void setItemWidth(qreal width);
-    qDebug() << "Last Row Visibility Check:";
+    QNetworkAccessManager* m_networkManager = nullptr;
     qreal spacing() const { return m_spacing; }
     void setSpacing(qreal spacing);
-    qDebug() << "  Item rectangle: top=" << itemTop << "bottom=" << itemBottom;
+    QVector<ImageData> m_imageData;
     bool useLocalImages() const { return m_useLocalImages; }
     void setUseLocalImages(bool local);
 
     QString imagePrefix() const { return m_imagePrefix; }
     void setImagePrefix(const QString &prefix);
-void CustomImageListView::ensureIndexVisible(int index)
+    qreal m_startPositionX = 0;
     QVariantList imageUrls() const { return m_imageUrls; }
     void setImageUrls(const QVariantList &urls);
-{
+    int m_count = 15;
     QStringList imageTitles() const { return m_imageTitles; }
     void setImageTitles(const QStringList &titles);
-    if (index < 0 || index >= m_imageData.size()) {
+    qreal m_itemWidth = 200;
     int currentIndex() const { return m_currentIndex; }
     void setCurrentIndex(int index);
-        return;
+    qreal m_itemHeight = 200;
     QVariantList localImageUrls() const { return m_localImageUrls; }
     void setLocalImageUrls(const QVariantList &urls);
 
@@ -134,7 +134,7 @@ void CustomImageListView::ensureIndexVisible(int index)
 
     int rowCount() const { return m_rowCount; }
     void setRowCount(int count);
-    }
+    QStringList m_imageTitles;
     qreal contentX() const { return m_contentX; }
     void setContentX(qreal x);
 
@@ -143,33 +143,33 @@ void CustomImageListView::ensureIndexVisible(int index)
 
     qreal contentWidth() const;
     qreal contentHeight() const;
-            itemCount++;
+    int m_nodeCount = 0;
     qreal itemHeight() const { return m_itemHeight; }
     void setItemHeight(qreal height);
-
+    void navigateUp();
     qreal rowSpacing() const { return m_rowSpacing; }
     void setRowSpacing(qreal spacing);
-
+    void ensureFocus();
     QStringList rowTitles() const { return m_rowTitles; }
     void setRowTitles(const QStringList &titles);
-            if (isLastCategory) {
+
     QUrl jsonSource() const { return m_jsonSource; }
     void setJsonSource(const QUrl &source);
-                position = qMin(position, contentHeight() - dims.rowHeight - m_titleHeight);
+
     qreal startPositionX() const { return m_startPositionX; }
     void setStartPositionX(qreal x);
-            }
+
     int nodeCount() const { return m_totalNodeCount; }
     int textureCount() const { return m_textureCount; }
-
+    void safeReleaseTextures();
     bool enableNodeMetrics() const { return m_enableNodeMetrics; }
     void setEnableNodeMetrics(bool enable);
-
+    void loadImage(int index);
     bool enableTextureMetrics() const { return m_enableTextureMetrics; }
     void setEnableTextureMetrics(bool enable);
-    if (m_localImageUrls != urls) {
+
     void updateMetricCounts(int nodes, int textures);
-        m_localImageUrls = urls;
+
 signals:
     void countChanged();
     void itemWidthChanged();
@@ -196,7 +196,7 @@ signals:
     void assetFocused(const QJsonObject& assetData);
     void enableNodeMetricsChanged();
     void enableTextureMetricsChanged();
-        emit localImageUrlsChanged();
+
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
     void componentComplete() override;
@@ -206,7 +206,7 @@ protected:
     bool event(QEvent *e) override;
     void mousePressEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
-        loadAllImages();
+
 private:
     // Struct definitions
     struct ImageData {
@@ -217,32 +217,32 @@ private:
         QString id;
         QString thumbnailUrl;
         QMap<QString, QString> links;
-
+    QString generateImageUrl(int index) const;
         bool operator==(const ImageData& other) const {
             return url == other.url && 
                    title == other.title && 
                    category == other.category && 
                    id == other.id;
-
+    qreal categoryContentWidth(const QString& category) const;
     };
-    // Calculate the maximum allowed scroll position
+
     struct TexturedNode {
         TexturedNode() : node(nullptr), texture(nullptr) {}
         ~TexturedNode() {
             delete node;
             node = nullptr;
             texture = nullptr;
-
+    QVector<int> getVisibleIndices(qreal bufferFactor = 0.5); // Add overloaded version that takes a buffer factor
         QSGGeometryNode *node;
         QSGTexture *texture;
     };
-    for (int categoryIndex = 0; categoryIndex < m_rowTitles.size(); ++categoryIndex) {
+
     struct CategoryDimensions {
         int rowHeight;
         int posterHeight;
         int posterWidth;
         qreal itemSpacing;
-
+    };
 
     // Member variables
     QNetworkAccessManager* m_networkManager = nullptr;
@@ -289,16 +289,16 @@ private:
     QHash<QUrl, QImage> m_urlImageCache;
     QMap<int, TexturedNode> m_nodes;
     QMap<QString, NavigationPosition> m_categoryPositions;
-
+    // Category dimensions helper
     // Texture management constants
     static const int MAX_TEXTURE_CACHE = 20;  // Max textures to keep in memory
     static const int MAX_VISIBLE_ROWS = 6;    // Increased from 3 to 6
     static const int CLEANUP_THRESHOLD = MAX_VISIBLE_ROWS * 10;  // Cleanup threshold updated
-                setRowSpacing(kv3Config["rowSpacing"].toInt());
+    
     QQueue<int> m_textureUsageQueue;    // Track texture usage order
     QSet<int> m_visibleIndices;         // Currently visible indices
     QSet<QString> m_visibleCategories;   // Track visible row categories
-                qDebug() << "Setting row spacing from JSON:" << m_rowSpacing;
+    CategoryDimensions getDimensionsForCategory(const QString& category) const;
     // Method declarations (one per method)
     void addDefaultItems();
     void ensureValidIndex(int &index);
@@ -356,26 +356,26 @@ private:
     QVector<int> getVisibleIndices();
     QVector<int> getVisibleIndices(qreal bufferFactor = 0.5); // Add overloaded version that takes a buffer factor
     void debugLastRowVisibility(); // Add debug helper
-            } else {
+                qDebug() << "No rowSpacing in JSON, using default:" << m_rowSpacing;
     // Category dimensions helper
     CategoryDimensions getDimensionsForCategory(const QString& category) const;
-                qDebug() << "No rowSpacing in JSON, using default:" << m_rowSpacing;
+
     // New helper method for processing swimlane dimensions
     void processSwimlaneDimensions(const QJsonObject &swimlaneObj);
-            }
+
     void recycleOffscreenTextures();
     void cacheTexture(int index, QSGTexture* texture);
     bool isIndexVisible(int index) const;
-            
+    void recycleOffscreenTextures();
     int getCurrentItemPositionInCategory() const;
     void preloadRowTextures(const QString& category);
-            // Get row title configuration
+    void cacheTexture(int index, QSGTexture* texture);
     int findMatchingPositionInNextCategory(const QString& currentCategory, const QString& nextCategory);
     qreal calculateRequiredScrollPosition(int targetIndex);
-
+    bool isIndexVisible(int index) const;
     void ensureLastRowVisible(int targetIndex);
     void animateToPosition(int targetIndex, qreal desiredY);
-
+            
     // Add this declaration
     void loadVisibleTextures();
     void ensureLastRowFullyVisible();
@@ -385,15 +385,22 @@ private:
 
     // Add missing method declaration
     void updateVisibleCategories();
-                qDebug() << "Setting title height from JSON:" << m_titleHeight;
+    int findMatchingPositionInNextCategory(const QString& currentCategory, const QString& nextCategory);
 private slots:
     void onNetworkReplyFinished();
     void onNetworkError(QNetworkReply::NetworkError code);
     void onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
     void onScrollAnimationValueChanged(const QVariant &value);
 };
-            } else {
+    qreal calculateRequiredScrollPosition(int targetIndex);
 #endif // CUSTOMIMAGELISTVIEW_H
+    void onScrollAnimationValueChanged(const QVariant &value);
+
+};
+
+            } else {
+#endif // CUSTOMIMAGELISTVIEW_H
+
 
         QTimer::singleShot(50, this, [this]() {
 
