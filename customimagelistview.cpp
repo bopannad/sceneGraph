@@ -31,6 +31,7 @@
 #include <QtNetwork/QSslConfiguration>
 #include <QRunnable>  // Add this line to include QRunnable
 #include <QPointer>
+#include <QPainterPath>  // Add this include to fix QPainterPath error
 
 
 
@@ -99,21 +100,71 @@ CustomImageListView::~CustomImageListView()
     safeCleanup();
 }
 
+// Fix #2: Proper initial positioning
 void CustomImageListView::componentComplete()
 {
     QQuickItem::componentComplete();
     
-    // Wait for scene graph initialization
-    if (window()) {
-        connect(window(), &QQuickWindow::beforeRendering, this, [this]() {
-            if (!m_windowReady && window()->isExposed()) {
-                m_windowReady = true;
-                loadAllImages();
-            }
-        }, Qt::DirectConnection);
-    }
+    // Reset all category scroll positions to 0
+    m_categoryContentX.clear();
     
-    debugResourceSystem();
+    // Reset vertical scroll position
+    m_contentY = 0;
+    
+    // Reset all animations
+    stopCurrentAnimation();
+    
+    // Initialize all row scroll positions to 0
+    if (!m_rowTitles.isEmpty()) {
+        for (const QString& category : m_rowTitles) {
+            setCategoryContentX(category, 0);
+        }
+    }
+
+    // Use a timer to ensure proper initial positioning after everything is loaded
+    QTimer::singleShot(150, this, [this]() {
+        // Set initial index if not set
+        if (m_currentIndex < 0 || m_currentIndex >= m_imageData.size()) {
+            // Default to the first item
+            if (!m_imageData.isEmpty()) {
+                m_currentIndex = 0;
+            }
+        }
+        
+        if (m_currentIndex >= 0 && m_currentIndex < m_imageData.size()) {
+            // Update current category
+            QString category = m_imageData[m_currentIndex].category;
+            updateCurrentCategory();
+            
+            // Make sure the item is centered both horizontally and vertically
+            qreal viewportCenter = height() / 2;
+            qreal targetY = calculateItemVerticalPosition(m_currentIndex);
+            CategoryDimensions dims = getDimensionsForCategory(category);
+            qreal initialScrollY = targetY - viewportCenter + (dims.rowHeight / 2);
+            
+            // Set the initial scroll position
+            setContentY(qMax(0.0, initialScrollY));
+            
+            // Set the horizontal position too (center the focused item)
+            int itemPosInCategory = getCurrentItemPositionInCategory();
+            qreal targetX = itemPosInCategory * (dims.posterWidth + dims.itemSpacing);
+            targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
+            setCategoryContentX(category, targetX);
+            
+            // Force loading of visible textures
+            m_visibleCategories.insert(category);
+            loadVisibleTextures();
+            
+            // Update and ensure focus
+            update();
+            ensureFocus();
+        }
+    });
+    
+    // Initial starting position
+    m_startPositionX = 50;  // Fixed left margin of 50px
+    
+    update();
 }
 
 void CustomImageListView::geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry)
@@ -139,140 +190,86 @@ void CustomImageListView::loadAllImages()
         return;
     }
 
-    // Calculate layout and total item count
-    qreal currentY = 0;
-    int totalItems = 0;
+    // Get current visible indices - use the parameterized version with default buffer
+    QVector<int> newVisibleIndices = getVisibleIndices(0.5);
+    
+    // Update visible set
+    m_visibleIndices.clear();
+    for (int index : newVisibleIndices) {
+        m_visibleIndices.insert(index);
+    }
+    
+    // Only load visible images immediately
+    for (int index : newVisibleIndices) {
+        if (!m_nodes.contains(index)) {
+            loadImage(index);
+        }
+    }
+    
+    // Cleanup old textures if we have too many
+    if (m_nodes.size() > CLEANUP_THRESHOLD) {
+        recycleOffscreenTextures();
+    }
+}
 
-    // Count total items and calculate height
+// Fix the handleContentPositionChange method to use the parameterized version
+void CustomImageListView::handleContentPositionChange()
+{
+    if (m_isBeingDestroyed) return;
+    
+    // Update visible categories with expanded range
+    m_visibleCategories.clear();
+    qreal bufferSize = height() * 0.5;
+    qreal viewportTop = m_contentY - bufferSize;
+    qreal viewportBottom = m_contentY + height() + bufferSize;
+    qreal currentY = 0;
+    
+    // Determine which categories are visible
     for (const QString &category : m_rowTitles) {
-        int itemsInCategory = 0;
-        for (const ImageData &imgData : m_imageData) {
-            if (imgData.category == category) {
-                itemsInCategory++;
-                totalItems++;
-            }
+        CategoryDimensions dims = getDimensionsForCategory(category);
+        qreal rowStart = currentY;
+        qreal rowEnd = currentY + dims.rowHeight + m_titleHeight;
+        
+        // Check if this row is visible
+        if (!(rowEnd < viewportTop || rowStart > viewportBottom)) {
+            m_visibleCategories.insert(category);
         }
         
-        currentY += m_titleHeight; 
-        currentY += itemsInCategory * (m_itemHeight + m_spacing);
-        currentY += m_rowSpacing;
+        currentY += dims.rowHeight + m_titleHeight + m_rowSpacing;
     }
-
-    // Update content height and count
-    setImplicitHeight(currentY);
-    m_count = totalItems;
     
-    // Get list of visible indices first
-    QVector<int> visibleIndices = getVisibleIndices();
-    QVector<int> offscreenIndices;
+    // Get visible indices as before - use the parameterized version with default buffer
+    QVector<int> newVisibleIndices = getVisibleIndices(0.5);
+    m_visibleIndices.clear();
+    for (int index : newVisibleIndices) {
+        m_visibleIndices.insert(index);
+    }
     
-    // Add all other indices to the offscreen list
-    for (int i = 0; i < m_count; i++) {
-        if (!visibleIndices.contains(i)) {
-            offscreenIndices.append(i);
+    // Load textures for newly visible items
+    for (int index : newVisibleIndices) {
+        if (!m_nodes.contains(index)) {
+            QTimer::singleShot(10, this, [this, index]() {
+                if (!m_isBeingDestroyed) {
+                    loadImage(index);
+                }
+            });
         }
     }
     
-    qDebug() << "Loading" << visibleIndices.size() << "visible images first, then" 
-             << offscreenIndices.size() << "offscreen images";
-    
-    // First load all visible images
-    for (int index : visibleIndices) {
-        loadImage(index);
-    }
-    
-    // Then queue off-screen images with a delay to prevent blocking UI
-    for (int i = 0; i < offscreenIndices.size(); i++) {
-        int index = offscreenIndices[i];
-        // Spread out loading of offscreen images to prevent overloading
-        QTimer::singleShot(50 * (i + 1), this, [this, index]() {
-            if (!m_isBeingDestroyed) {
-                loadImage(index);
-            }
-        });
+    // Cleanup if we have too many textures
+    if (m_nodes.size() > CLEANUP_THRESHOLD) {
+        recycleOffscreenTextures();
     }
 }
 
 // Add this new method to determine which indices are visible
+// Delete or comment out this function since we'll use the parameterized version
+/*
 QVector<int> CustomImageListView::getVisibleIndices()
 {
-    QVector<int> visibleIndices;
-    
-    if (width() <= 0 || height() <= 0) {
-        return visibleIndices;
-    }
-    
-    // Define the viewport boundaries
-    qreal viewportTop = m_contentY;
-    qreal viewportBottom = m_contentY + height();
-    
-    qreal currentY = 0;
-    int currentIndex = 0;
-    
-    // Iterate through categories
-    for (int categoryIndex = 0; categoryIndex < m_rowTitles.size(); ++categoryIndex) {
-        QString categoryName = m_rowTitles[categoryIndex];
-        CategoryDimensions dims = getDimensionsForCategory(categoryName);
-        
-        // Add title height
-        currentY += m_titleHeight + 10; // Same spacing as in updatePaintNode
-        
-        // Skip if entire category is below viewport
-        if (currentY > viewportBottom) {
-            // Skip to next category after counting items in this one
-            for (const ImageData &imgData : m_imageData) {
-                if (imgData.category == categoryName) {
-                    currentIndex++;
-                }
-            }
-            // Add category height and continue
-            currentY += dims.rowHeight + m_rowSpacing;
-            continue;
-        }
-        
-        // Calculate category end position
-        qreal categoryEndY = currentY + dims.rowHeight;
-        
-        // Skip if entire category is above viewport
-        if (categoryEndY < viewportTop) {
-            // Skip this category
-            for (const ImageData &imgData : m_imageData) {
-                if (imgData.category == categoryName) {
-                    currentIndex++;
-                }
-            }
-            currentY = categoryEndY + m_rowSpacing;
-            continue;
-        }
-        
-        // Category is visible (at least partially), check each item
-        qreal xPos = m_startPositionX + 10; // Same as in updatePaintNode
-        qreal categoryX = xPos - getCategoryContentX(categoryName);
-        int itemsInThisCategory = 0;
-        
-        for (int i = 0; i < m_imageData.size(); i++) {
-            if (m_imageData[i].category == categoryName) {
-                // Item is in this category, check if it's visible
-                if (currentY >= viewportTop - dims.posterHeight && 
-                    currentY <= viewportBottom + dims.posterHeight &&
-                    categoryX >= -dims.posterWidth &&
-                    categoryX <= width() + dims.posterWidth) {
-                    
-                    visibleIndices.append(currentIndex);
-                }
-                
-                categoryX += dims.posterWidth + dims.itemSpacing;
-                currentIndex++;
-                itemsInThisCategory++;
-            }
-        }
-        
-        // Move to next category
-        currentY = categoryEndY + m_rowSpacing;
-    }
-    
-    return visibleIndices;
+    // ... existing implementation ...
 }
+*/
 
 void CustomImageListView::safeReleaseTextures()
 {
@@ -450,7 +447,8 @@ QSGGeometryNode* CustomImageListView::createTexturedRect(const QRectF &rect, QSG
     node->setGeometry(geometry);
     node->setFlag(QSGNode::OwnsGeometry);
 
-    QSGOpaqueTextureMaterial *material = new QSGOpaqueTextureMaterial;
+    // For rounded corners, use textured material with alpha blending instead of opaque
+    QSGTextureMaterial *material = new QSGTextureMaterial;
     material->setTexture(texture);
     
     node->setMaterial(material);
@@ -666,32 +664,72 @@ void CustomImageListView::loadUrlImage(int index, const QUrl &url)
 
 void CustomImageListView::processLoadedImage(int index, const QImage &image)
 {
-    if (!image.isNull() && window()) {
-        // Convert image to optimal format for textures
-        QImage optimizedImage = image.convertToFormat(QImage::Format_RGBA8888);
+    if (!image.isNull() && window() && m_visibleIndices.contains(index)) {
+        QString category = "";
+        if (index < m_imageData.size()) {
+            category = m_imageData[index].category;
+        }
         
-        // Scale maintaining aspect ratio
-        QImage scaledImage = optimizedImage.scaled(m_itemWidth, m_itemHeight,
-                                                 Qt::KeepAspectRatio,
-                                                 Qt::SmoothTransformation);
+        CategoryDimensions dims = getDimensionsForCategory(category);
+        QImage::Format format = QImage::Format_ARGB32_Premultiplied;
         
-        // Create texture with proper flag (corrected syntax)
+        // Convert image to optimal format if needed
+        QImage optimizedImage = (image.format() == format) ? 
+                               image : image.convertToFormat(format);
+        
+        // Create target image with transparent background
+        QImage roundedImage(dims.posterWidth, dims.posterHeight, format);
+        roundedImage.fill(Qt::transparent);
+        
+        QPainter painter(&roundedImage);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        
+        // Calculate corner radius
+        int radius = qMin(dims.posterWidth, dims.posterHeight) * 0.1;
+        radius = qBound(5, radius, 15);
+        
+        // Create rounded rectangle path
+        QPainterPath path;
+        path.addRoundedRect(0, 0, dims.posterWidth, dims.posterHeight, radius, radius);
+        painter.setClipPath(path);
+        
+        // Calculate scaling while preserving aspect ratio
+        qreal sourceRatio = (qreal)optimizedImage.width() / optimizedImage.height();
+        qreal targetRatio = (qreal)dims.posterWidth / dims.posterHeight;
+        
+        QRect targetRect;
+        if (sourceRatio > targetRatio) {
+            // Image is wider than target - scale to height
+            int scaledWidth = dims.posterHeight * sourceRatio;
+            targetRect = QRect((dims.posterWidth - scaledWidth) / 2, 0, 
+                             scaledWidth, dims.posterHeight);
+        } else {
+            // Image is taller than target - scale to width
+            int scaledHeight = dims.posterWidth / sourceRatio;
+            targetRect = QRect(0, (dims.posterHeight - scaledHeight) / 2,
+                             dims.posterWidth, scaledHeight);
+        }
+        
+        // Draw the image scaled to fit
+        painter.drawImage(targetRect, optimizedImage);
+        
+        // Add subtle border
+        painter.setClipping(false);
+        painter.setPen(QPen(QColor(255, 255, 255, 40), 1));
+        painter.drawPath(path);
+        
+        painter.end();
+        
+        // Create texture
         QSGTexture *texture = window()->createTextureFromImage(
-            scaledImage,
+            roundedImage,
             QQuickWindow::TextureHasAlphaChannel
         );
 
         if (texture) {
-            // Update the node map
-            TexturedNode node;
-            node.texture = texture;
-            node.node = nullptr;
-            m_nodes[index] = node;
-            
-            qDebug() << "Created texture for image" << index 
-                     << "size:" << scaledImage.size();
-            
-            update(); // Request new frame
+            cacheTexture(index, texture);
+            update();
         }
     }
 }
@@ -857,7 +895,7 @@ QSGNode* CustomImageListView::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeD
         if (titleNode) {
             parentNode->appendChildNode(titleNode);
         }
-        currentY += m_titleHeight + 10; // Changed from 5 to 10 for more spacing after title
+        currentY += m_titleHeight + 3; // Reduced from 5 to 3
         
         // Calculate items in this category
         QVector<ImageData> categoryItems;
@@ -905,7 +943,7 @@ QSGNode* CustomImageListView::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeD
             }
         }
         
-        currentY += dims.rowHeight + m_rowSpacing;
+        currentY += dims.rowHeight + (m_rowSpacing * 0.3); // Reduced from 0.75 to 0.3
     }
     
     // Before returning, update metrics with accurate counts
@@ -932,49 +970,80 @@ void CustomImageListView::addSelectionEffects(QSGNode* container, const QRectF& 
     if (m_isBeingDestroyed) return;
     
     // Calculate scaled dimensions for focus border to match zoomed asset
-    const float scaleFactor = 1.1f;  // Match the zoom factor from createTexturedRect
+    const float scaleFactor = 1.1f;
     qreal widthDiff = rect.width() * (scaleFactor - 1.0f);
     qreal heightDiff = rect.height() * (scaleFactor - 1.0f);
     
+    // Ensure integer coordinates to avoid anti-aliasing artifacts
     QRectF scaledRect(
-        rect.x() - widthDiff / 2,
-        rect.y() - heightDiff / 2,
-        rect.width() * scaleFactor,
-        rect.height() * scaleFactor
+        qRound(rect.x() - widthDiff / 2),
+        qRound(rect.y() - heightDiff / 2),
+        qRound(rect.width() * scaleFactor),
+        qRound(rect.height() * scaleFactor)
     );
     
-    // Create white border effect
+    // Create geometry for rounded border
     QSGGeometryNode *borderNode = new QSGGeometryNode;
     
-    // Create geometry for border (4 lines forming a rectangle)
-    QSGGeometry *borderGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 8);
-    borderGeometry->setDrawingMode(GL_LINES);
-    borderGeometry->setLineWidth(2); // Border width
+    const int segments = 32;
+    // Add extra vertices to properly close the path
+    const int totalPoints = ((segments + 1) * 4) + 2;
+    
+    QSGGeometry *borderGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), totalPoints);
+    borderGeometry->setDrawingMode(GL_LINE_STRIP);
+    borderGeometry->setLineWidth(1.5);
     
     QSGGeometry::Point2D *vertices = borderGeometry->vertexDataAsPoint2D();
+    int idx = 0;
     
-    // Top line
-    vertices[0].set(scaledRect.left(), scaledRect.top());
-    vertices[1].set(scaledRect.right(), scaledRect.top());
+    qreal radius = qMin(scaledRect.width(), scaledRect.height()) * 0.1;
+    radius = qBound(5.0, radius, 15.0);
     
-    // Right line
-    vertices[2].set(scaledRect.right(), scaledRect.top());
-    vertices[3].set(scaledRect.right(), scaledRect.bottom());
+    // Start exactly at left edge, middle of top-left radius
+    vertices[idx++].set(scaledRect.left(), scaledRect.top() + radius);
     
-    // Bottom line
-    vertices[4].set(scaledRect.right(), scaledRect.bottom());
-    vertices[5].set(scaledRect.left(), scaledRect.bottom());
-    
-    // Left line
-    vertices[6].set(scaledRect.left(), scaledRect.bottom());
-    vertices[7].set(scaledRect.left(), scaledRect.top());
+    // Top-left corner
+    for (int i = 0; i <= segments; ++i) {
+        qreal angle = M_PI + (M_PI_2) * i / segments;
+        qreal x = scaledRect.left() + radius + radius * cos(angle);
+        qreal y = scaledRect.top() + radius + radius * sin(angle);
+        vertices[idx++].set(x, y);
+    }
+
+    // Top-right corner
+    for (int i = 0; i <= segments; ++i) {
+        qreal angle = -M_PI_2 + (M_PI_2) * i / segments;
+        qreal x = scaledRect.right() - radius + radius * cos(angle);
+        qreal y = scaledRect.top() + radius + radius * sin(angle);
+        vertices[idx++].set(x, y);
+    }
+
+    // Bottom-right corner
+    for (int i = 0; i <= segments; ++i) {
+        qreal angle = (M_PI_2) * i / segments;
+        qreal x = scaledRect.right() - radius + radius * cos(angle);
+        qreal y = scaledRect.bottom() - radius + radius * sin(angle);
+        vertices[idx++].set(x, y);
+    }
+
+    // Bottom-left corner
+    for (int i = 0; i <= segments; ++i) {
+        qreal angle = M_PI_2 + (M_PI_2) * i / segments;
+        qreal x = scaledRect.left() + radius + radius * cos(angle);
+        qreal y = scaledRect.bottom() - radius + radius * sin(angle);
+        vertices[idx++].set(x, y);
+    }
+
+    // Explicitly close path by returning to start point
+    vertices[idx++].set(scaledRect.left(), scaledRect.top() + radius);
+    // Add final vertex at start to ensure proper closure
+    vertices[idx].set(scaledRect.left(), scaledRect.top() + radius);
     
     borderNode->setGeometry(borderGeometry);
     borderNode->setFlag(QSGNode::OwnsGeometry);
     
-    // Create white material for border
     QSGFlatColorMaterial *borderMaterial = new QSGFlatColorMaterial;
-    borderMaterial->setColor(QColor(Qt::white));
+    borderMaterial->setColor(QColor(255, 255, 255, 230));
     
     borderNode->setMaterial(borderMaterial);
     borderNode->setFlag(QSGNode::OwnsMaterial);
@@ -1143,17 +1212,9 @@ void CustomImageListView::setCurrentIndex(int index)
 
 void CustomImageListView::keyPressEvent(QKeyEvent *event)
 {
-    qDebug() << "Key pressed in CustomImageListView:" << event->key() << "Has focus:" << hasActiveFocus();
+    qDebug() << "Key pressed:" << event->key() << "Has focus:" << hasActiveFocus();
     
     switch (event->key()) {
-        case Qt::Key_Left:
-            if (!navigateLeft()) {
-                // Important: Don't accept the event if we're at leftmost position
-                event->setAccepted(false);
-                return;
-            }
-            event->accept();
-            break;
         case Qt::Key_Return:
         case Qt::Key_Enter:
         case Qt::Key_Space:
@@ -1162,6 +1223,10 @@ void CustomImageListView::keyPressEvent(QKeyEvent *event)
             break;
         case Qt::Key_I:
             handleKeyAction(Qt::Key_I);
+            event->accept();
+            break;
+        case Qt::Key_Left:        // Add back left navigation
+            navigateLeft();
             event->accept();
             break;
         case Qt::Key_Right:       // Add back right navigation
@@ -1287,6 +1352,12 @@ bool CustomImageListView::navigateLeft()
         
         ensureIndexVisible(prevIndex);
         update();
+        
+        // Add cleanup check after scrolling
+        if (m_nodes.size() > CLEANUP_THRESHOLD) {
+            recycleOffscreenTextures();
+        }
+        
         return true;
     }
     
@@ -1295,69 +1366,67 @@ bool CustomImageListView::navigateLeft()
 
 void CustomImageListView::navigateRight()
 {
-    if (m_currentIndex < 0 || m_imageData.isEmpty()) {
-        return;
-    }
-
     QString currentCategory = m_imageData[m_currentIndex].category;
     int nextIndex = m_currentIndex + 1;
     
-    // Check if we're at the rightmost item in the category
-    bool isRightmost = true;
-    for (int i = m_currentIndex + 1; i < m_imageData.size(); i++) {
-        if (m_imageData[i].category == currentCategory) {
-            isRightmost = false;
-            break;
-        }
-    }
-    
-    if (isRightmost) {
-        qDebug() << "At rightmost position, no action";
-        return;  // At rightmost position, do nothing
-    }
-    
-    // Handle navigation within the category
     while (nextIndex < m_imageData.size()) {
         if (m_imageData[nextIndex].category != currentCategory) {
             break;
         }
         
-        // Get category dimensions for animation calculations
+        // Get category dimensions and calculate if scrolling is needed
         CategoryDimensions dims = getDimensionsForCategory(currentCategory);
+        int itemsInCategory = 0;
+        int lastIndexInCategory = nextIndex;
         
-        // Update current index first
+        // Count items in this category and find last index
+        for (int i = 0; i < m_imageData.size(); i++) {
+            if (m_imageData[i].category == currentCategory) {
+                itemsInCategory++;
+                lastIndexInCategory = i;
+            }
+        }
+        
         setCurrentIndex(nextIndex);
+        ensureIndexVisible(nextIndex);
         ensureFocus();
         updateCurrentCategory();
         
         // Calculate scroll target position with animation
-        int itemsBeforeInCategory = 0;
-        for (int i = 0; i < nextIndex; i++) {
-            if (m_imageData[i].category == currentCategory) {
-                itemsBeforeInCategory++;
+        qreal totalWidth = itemsInCategory * dims.posterWidth + 
+                          (itemsInCategory - 1) * dims.itemSpacing;
+                          
+        if (totalWidth > width()) {
+            qreal targetX;
+            if (nextIndex == lastIndexInCategory) {
+                targetX = categoryContentWidth(currentCategory) - width();
+            } else {
+                int itemsBeforeInCategory = 0;
+                for (int i = 0; i < nextIndex; i++) {
+                    if (m_imageData[i].category == currentCategory) {
+                        itemsBeforeInCategory++;
+                    }
+                }
+                targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
+                targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
             }
+            
+            // Animate to target position
+            animateScroll(currentCategory, targetX);
         }
         
-        qreal targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
-        
-        // Center the target item in view
-        targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
-        
-        // Log animation details to diagnose issues
-        qDebug() << "Right navigation - target X:" << targetX 
-                 << "dims.posterWidth:" << dims.posterWidth
-                 << "Items before:" << itemsBeforeInCategory;
-        
-        // Animate to target position
-        animateScroll(currentCategory, targetX);
-        
-        // Call ensure visible after animation setup
-        ensureIndexVisible(nextIndex);
         update();
+        
+        // Add cleanup check after scrolling
+        if (m_nodes.size() > CLEANUP_THRESHOLD) {
+            recycleOffscreenTextures();
+        }
+        
         return;
     }
 }
 
+// Update navigateUp and navigateDown methods
 void CustomImageListView::navigateUp()
 {
     if (m_currentIndex < 0 || m_rowTitles.isEmpty()) {
@@ -1367,115 +1436,54 @@ void CustomImageListView::navigateUp()
     QString currentCategory = m_imageData[m_currentIndex].category;
     int categoryIndex = m_rowTitles.indexOf(currentCategory);
     
-    if (categoryIndex > 0) {
-        QString prevCategory = m_rowTitles[categoryIndex - 1];
-        CategoryDimensions prevDims = getDimensionsForCategory(prevCategory);
+    if (categoryIndex <= 0) {
+        return;
+    }
+    
+    QString prevCategory = m_rowTitles[categoryIndex - 1];
+    
+    int targetIndex = findMatchingPositionInNextCategory(currentCategory, prevCategory);
+    
+    if (targetIndex != -1) {
+        // Calculate target position ensuring item remains visible
+        qreal targetY = calculateItemVerticalPosition(targetIndex);
+        CategoryDimensions dims = getDimensionsForCategory(prevCategory);
         
-        // Get current viewport horizontal boundaries
-        qreal viewportLeft = getCategoryContentX(prevCategory);
-        qreal viewportRight = viewportLeft + width();
-        qreal viewportCenterX = viewportLeft + width() / 2.0;
+        // Calculate proper scroll position that centers the item
+        qreal viewportCenter = height() / 2;
+        qreal desiredY = targetY - viewportCenter + (dims.rowHeight / 2);
         
-        // First, find all visible items in the previous category
-        QList<int> visibleIndices;
-        QMap<int, qreal> itemCenterPositions; // Map to store item center positions
+        // Bound the scroll position
+        qreal maxScroll = contentHeight() - height();
+        desiredY = qBound(0.0, desiredY, maxScroll);
         
-        // Find visible items in target row
-        for (int i = 0; i < m_imageData.size(); i++) {
-            if (m_imageData[i].category == prevCategory) {
-                // Calculate item's position
-                int itemsBeforeThis = 0;
-                for (int j = 0; j < i; j++) {
-                    if (m_imageData[j].category == prevCategory) {
-                        itemsBeforeThis++;
-                    }
-                }
-                
-                // Calculate item bounds
-                qreal itemLeft = m_startPositionX + 10 + 
-                                itemsBeforeThis * (prevDims.posterWidth + prevDims.itemSpacing);
-                qreal itemRight = itemLeft + prevDims.posterWidth;
-                qreal itemCenter = itemLeft + prevDims.posterWidth / 2.0;
-                
-                // Store item center position
-                itemCenterPositions[i] = itemCenter;
-                
-                // Check if item would be visible after navigation
-                bool isVisible = (itemRight > viewportLeft && itemLeft < viewportRight);
-                
-                if (isVisible) {
-                    visibleIndices.append(i);
-                    qDebug() << "Visible item in prev category:" << i << "center:" << itemCenter;
-                }
-            }
-        }
+        // Animate to new position
+        QPropertyAnimation* anim = new QPropertyAnimation(this, "contentY");
+        anim->setDuration(300);
+        anim->setEasingCurve(QEasingCurve::OutCubic);
+        anim->setStartValue(m_contentY);
+        anim->setEndValue(desiredY);
         
-        // Find best item to focus on
-        int bestMatchIndex = -1;
-        
-        if (!visibleIndices.isEmpty()) {
-            // Find most centered visible item
-            qreal bestDistance = std::numeric_limits<qreal>::max();
-            
-            for (int idx : visibleIndices) {
-                qreal itemCenter = itemCenterPositions[idx];
-                qreal distance = qAbs(itemCenter - viewportCenterX);
-                
-                if (distance < bestDistance) {
-                    bestDistance = distance;
-                    bestMatchIndex = idx;
-                }
-            }
-        } else {
-            // If no visible items, select first item in category
-            for (int i = 0; i < m_imageData.size(); i++) {
-                if (m_imageData[i].category == prevCategory) {
-                    bestMatchIndex = i;
-                    break;
-                }
-            }
-        }
-        
-        // If we found a match, navigate to it
-        if (bestMatchIndex != -1) {
-            qDebug() << "Up navigation selected item:" << bestMatchIndex;
-            
-            // Calculate target Y position
-            qreal targetY = calculateItemVerticalPosition(bestMatchIndex);
-            
-            // Center vertically
-            qreal centerOffset = (height() - prevDims.posterHeight) / 2;
-            targetY = qMax(0.0, targetY - centerOffset);
-            
-            // Animate only the vertical scroll
-            animateVerticalScroll(targetY);
-            
-            // Update current index
-            setCurrentIndex(bestMatchIndex);
+        // Update selection after animation
+        connect(anim, &QPropertyAnimation::finished, this, [this, targetIndex]() {
+            setCurrentIndex(targetIndex);
             ensureFocus();
-            updateCurrentCategory();
-            
-            // If the selected item isn't visible, ensure it becomes visible
-            int itemsBeforeThis = 0;
-            for (int i = 0; i < bestMatchIndex; i++) {
-                if (m_imageData[i].category == prevCategory) {
-                    itemsBeforeThis++;
-                }
-            }
-            
-            qreal itemLeft = itemsBeforeThis * (prevDims.posterWidth + prevDims.itemSpacing);
-            if (!visibleIndices.contains(bestMatchIndex)) {
-                // If item wasn't visible, scroll to make it visible
-                qreal targetX = itemLeft - (width() - prevDims.posterWidth) / 2;
-                targetX = qBound(0.0, targetX, qMax(0.0, categoryContentWidth(prevCategory) - width()));
-                animateScroll(prevCategory, targetX);
-            }
-            
+            ensureIndexVisible(targetIndex);
             update();
-        }
+        });
+        
+        connect(anim, &QPropertyAnimation::finished, anim, &QPropertyAnimation::deleteLater);
+        anim->start();
+        
+        // Preload textures for target category
+        m_visibleCategories.insert(prevCategory);
+        QTimer::singleShot(0, this, [this, prevCategory]() {
+            preloadRowTextures(prevCategory);
+        });
     }
 }
 
+// Fix #3: Improved last row visibility
 void CustomImageListView::navigateDown()
 {
     if (m_currentIndex < 0 || m_rowTitles.isEmpty()) {
@@ -1485,112 +1493,292 @@ void CustomImageListView::navigateDown()
     QString currentCategory = m_imageData[m_currentIndex].category;
     int categoryIndex = m_rowTitles.indexOf(currentCategory);
     
-    if (categoryIndex < m_rowTitles.size() - 1) {
-        QString nextCategory = m_rowTitles[categoryIndex + 1];
-        CategoryDimensions nextDims = getDimensionsForCategory(nextCategory);
+    if (categoryIndex >= m_rowTitles.size() - 1) {
+        return;
+    }
+    
+    QString nextCategory = m_rowTitles[categoryIndex + 1];
+    int targetIndex = findMatchingPositionInNextCategory(currentCategory, nextCategory);
+    
+    if (targetIndex != -1) {
+        CategoryDimensions dims = getDimensionsForCategory(nextCategory);
+        bool isLastCategory = (categoryIndex == m_rowTitles.size() - 2);
         
-        // Get current viewport horizontal boundaries
-        qreal viewportLeft = getCategoryContentX(nextCategory);
-        qreal viewportRight = viewportLeft + width();
-        qreal viewportCenterX = viewportLeft + width() / 2.0;
-        
-        // First, find all visible items in the next category
-        QList<int> visibleIndices;
-        QMap<int, qreal> itemCenterPositions; // Map to store item center positions
-        
-        // Find visible items in target row
-        for (int i = 0; i < m_imageData.size(); i++) {
-            if (m_imageData[i].category == nextCategory) {
-                // Calculate item's position
-                int itemsBeforeThis = 0;
-                for (int j = 0; j < i; j++) {
-                    if (m_imageData[j].category == nextCategory) {
-                        itemsBeforeThis++;
-                    }
-                }
-                
-                // Calculate item bounds
-                qreal itemLeft = m_startPositionX + 10 + 
-                                itemsBeforeThis * (nextDims.posterWidth + nextDims.itemSpacing);
-                qreal itemRight = itemLeft + nextDims.posterWidth;
-                qreal itemCenter = itemLeft + nextDims.posterWidth / 2.0;
-                
-                // Store item center position
-                itemCenterPositions[i] = itemCenter;
-                
-                // Check if item would be visible after navigation
-                bool isVisible = (itemRight > viewportLeft && itemLeft < viewportRight);
-                
-                if (isVisible) {
-                    visibleIndices.append(i);
-                    qDebug() << "Visible item in next category:" << i << "center:" << itemCenter;
-                }
-            }
-        }
-        
-        // Find best item to focus on
-        int bestMatchIndex = -1;
-        
-        if (!visibleIndices.isEmpty()) {
-            // Find most centered visible item
-            qreal bestDistance = std::numeric_limits<qreal>::max();
+        // Calculate vertical positions
+        qreal targetY = calculateItemVerticalPosition(targetIndex);
+        qreal viewportHeight = height();
+        qreal desiredY;
+
+        if (isLastCategory) {
+            // For the last category, special handling to ensure it's fully visible
+            // Calculate the position of the item in the last row
+            qreal itemY = targetY;
             
-            for (int idx : visibleIndices) {
-                qreal itemCenter = itemCenterPositions[idx];
-                qreal distance = qAbs(itemCenter - viewportCenterX);
-                
-                if (distance < bestDistance) {
-                    bestDistance = distance;
-                    bestMatchIndex = idx;
-                }
-            }
+            // Calculate the position that would show the entire row including focus effects
+            qreal rowBottom = itemY + dims.posterHeight + (dims.posterHeight * 0.2); // Add 20% for focus
+            
+            // Position so the row bottom is at 90% of the viewport (leaves room for effects)
+            desiredY = rowBottom - (viewportHeight * 0.9);
+            
+            // Never scroll past content maximum
+            qreal maxScroll = contentHeight() - viewportHeight;
+            desiredY = qMin(desiredY, maxScroll);
         } else {
-            // If no visible items, select first item in category
-            for (int i = 0; i < m_imageData.size(); i++) {
-                if (m_imageData[i].category == nextCategory) {
-                    bestMatchIndex = i;
-                    break;
-                }
-            }
+            // For non-last categories, center the row in the viewport
+            desiredY = targetY - (viewportHeight - dims.rowHeight) / 2;
+            
+            // Apply standard bounds
+            qreal maxScroll = contentHeight() - viewportHeight;
+            desiredY = qBound(0.0, desiredY, maxScroll);
         }
         
-        // If we found a match, navigate to it
-        if (bestMatchIndex != -1) {
-            qDebug() << "Down navigation selected item:" << bestMatchIndex;
-            
-            // Calculate target Y position
-            qreal targetY = calculateItemVerticalPosition(bestMatchIndex);
-            
-            // Center vertically
-            qreal centerOffset = (height() - nextDims.posterHeight) / 2;
-            targetY = qMax(0.0, targetY - centerOffset);
-            
-            // Animate only the vertical scroll
-            animateVerticalScroll(targetY);
-            
-            // Update current index
-            setCurrentIndex(bestMatchIndex);
+        // Create animation with longer duration for smoother effect
+        QPropertyAnimation* anim = new QPropertyAnimation(this, "contentY");
+        anim->setDuration(350); // Slightly longer duration for smoother scrolling
+        anim->setEasingCurve(QEasingCurve::OutCubic);
+        anim->setStartValue(m_contentY);
+        anim->setEndValue(desiredY);
+        
+        // Update selection and load textures after animation
+        connect(anim, &QPropertyAnimation::finished, this, [this, targetIndex, nextCategory, isLastCategory]() {
+            setCurrentIndex(targetIndex);
             ensureFocus();
-            updateCurrentCategory();
             
-            // If the selected item isn't visible, ensure it becomes visible
-            int itemsBeforeThis = 0;
-            for (int i = 0; i < bestMatchIndex; i++) {
-                if (m_imageData[i].category == nextCategory) {
-                    itemsBeforeThis++;
-                }
-            }
+            // Force immediate texture load for visible items with larger buffer
+            m_visibleCategories.insert(nextCategory);
+            loadVisibleTextures();
             
-            qreal itemLeft = itemsBeforeThis * (nextDims.posterWidth + nextDims.itemSpacing);
-            if (!visibleIndices.contains(bestMatchIndex)) {
-                // If item wasn't visible, scroll to make it visible
-                qreal targetX = itemLeft - (width() - nextDims.posterWidth) / 2;
-                targetX = qBound(0.0, targetX, qMax(0.0, categoryContentWidth(nextCategory) - width()));
-                animateScroll(nextCategory, targetX);
+            // Additional check specifically for last row visibility
+            if (isLastCategory) {
+                // Short delay to ensure UI has updated
+                QTimer::singleShot(20, this, [this]() {
+                    ensureLastRowFullyVisible();
+                });
             }
             
             update();
+        });
+        
+        connect(anim, &QPropertyAnimation::finished, anim, &QPropertyAnimation::deleteLater);
+        anim->start();
+        
+        // Start preloading textures immediately with more buffer
+        m_visibleCategories.insert(nextCategory);
+        preloadRowTextures(nextCategory);
+    }
+}
+
+// Completely redesign this function for reliable last row visibility
+void CustomImageListView::ensureLastRowFullyVisible()
+{
+    if (m_currentIndex < 0 || m_imageData.isEmpty()) {
+        return;
+    }
+
+    QString category = m_imageData[m_currentIndex].category;
+    int categoryIndex = m_rowTitles.indexOf(category);
+    
+    // Only apply special handling for the last category
+    if (categoryIndex != m_rowTitles.size() - 1) {
+        return;
+    }
+
+    // Get dimensions for focused item
+    CategoryDimensions dims = getDimensionsForCategory(category);
+    
+    // Calculate actual vertical position of the item
+    qreal itemTop = calculateItemVerticalPosition(m_currentIndex);
+    qreal itemHeight = dims.posterHeight;
+    qreal focusPadding = itemHeight * 0.25; // 25% extra for focus effects
+    
+    // Calculate item bounds including focus effects
+    qreal itemBottom = itemTop + itemHeight + focusPadding;
+    
+    // Get viewport bounds
+    qreal viewportTop = m_contentY;
+    qreal viewportBottom = viewportTop + height();
+    
+    qDebug() << "Last row visibility check:";
+    qDebug() << "  Item top:" << itemTop << "Item bottom:" << itemBottom;
+    qDebug() << "  Viewport top:" << viewportTop << "Viewport bottom:" << viewportBottom;
+    
+    // Check if item is fully visible with focus effects
+    bool fullyVisible = (itemTop >= viewportTop && itemBottom <= viewportBottom);
+    if (!fullyVisible) {
+        qDebug() << "Last row not fully visible, adjusting";
+        
+        // If item is too high (top above viewport) or too low (bottom below viewport)
+        qreal newY;
+        
+        // Always prioritize showing the bottom with focus effects
+        if (itemBottom > viewportBottom) {
+            // Adjust so the bottom with focus effects is visible at 95% of viewport height
+            newY = itemBottom - (height() * 0.95);
+        } else if (itemTop < viewportTop) {
+            // If top is not visible, show the item from the top
+            newY = itemTop;
+        } else {
+            // Should not happen, but just in case
+            return;
         }
+        
+        // Apply the new position with a short animation for smoother experience
+        QPropertyAnimation* anim = new QPropertyAnimation(this, "contentY");
+        anim->setDuration(200);
+        anim->setEasingCurve(QEasingCurve::OutQuad);
+        anim->setStartValue(m_contentY);
+        anim->setEndValue(newY);
+        
+        connect(anim, &QPropertyAnimation::finished, anim, &QPropertyAnimation::deleteLater);
+        connect(anim, &QPropertyAnimation::finished, this, [this]() {
+            update();
+            // Double-check after animation to ensure we really got it right
+            QTimer::singleShot(50, this, [this]() {
+                debugLastRowVisibility(); // New debugging helper
+            });
+        });
+        
+        anim->start();
+    } else {
+        qDebug() << "Last row is fully visible already";
+    }
+}
+
+// Add this debugging helper
+void CustomImageListView::debugLastRowVisibility()
+{
+    if (m_currentIndex < 0 || m_currentIndex >= m_imageData.size()) {
+        return;
+    }
+    
+    QString category = m_imageData[m_currentIndex].category;
+    int categoryIndex = m_rowTitles.indexOf(category);
+    
+    if (categoryIndex != m_rowTitles.size() - 1) {
+        return; // Not the last row
+    }
+    
+    CategoryDimensions dims = getDimensionsForCategory(category);
+    qreal itemTop = calculateItemVerticalPosition(m_currentIndex);
+    qreal itemHeight = dims.posterHeight;
+    qreal itemBottom = itemTop + itemHeight;
+    qreal viewportTop = m_contentY;
+    qreal viewportBottom = viewportTop + height();
+    
+    qDebug() << "Last Row Visibility Check:";
+    qDebug() << "  Item rectangle: top=" << itemTop << "bottom=" << itemBottom;
+    qDebug() << "  Viewport: top=" << viewportTop << "bottom=" << viewportBottom;
+    qDebug() << "  Top visible:" << (itemTop >= viewportTop);
+    qDebug() << "  Bottom visible:" << (itemBottom <= viewportBottom);
+}
+
+void CustomImageListView::ensureIndexVisible(int index)
+{
+    if (index < 0 || index >= m_imageData.size()) {
+        return;
+    }
+
+    QString category = m_imageData[index].category;
+    CategoryDimensions dims = getDimensionsForCategory(category);
+    bool isLastCategory = (m_rowTitles.indexOf(category) == m_rowTitles.size() - 1);
+    
+    // Calculate target position
+    qreal targetY = calculateItemVerticalPosition(index);
+    qreal rowHeight = dims.rowHeight + m_titleHeight;
+    qreal viewportHeight = height();
+    
+    // Calculate scroll position
+    qreal desiredY;
+    
+    if (isLastCategory) {
+        // For last category, always scroll to show the entire row
+        desiredY = contentHeight() - viewportHeight;
+        
+        // Add small padding for visual comfort
+        desiredY = qMin(desiredY + (dims.posterHeight * 0.1), contentHeight() - viewportHeight);
+    } else {
+        // For other categories, center in viewport
+        desiredY = targetY - (viewportHeight - rowHeight) / 2;
+    }
+    
+    // Apply bounds
+    qreal maxScroll = contentHeight() - viewportHeight;
+    desiredY = qBound(0.0, desiredY, maxScroll);
+    
+    // Set final position
+    setContentY(desiredY);
+
+    // Handle horizontal scrolling
+    if (category == m_currentCategory) {
+        int itemsBeforeInCategory = 0;
+        for (int i = 0; i < index; i++) {
+            if (m_imageData[i].category == category) {
+                itemsBeforeInCategory++;
+            }
+        }
+        
+        qreal targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
+        targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
+        
+        // Animate the horizontal scroll
+        animateScroll(category, targetX);
+    }
+}
+
+// Add these new helper methods to the class implementation:
+
+int CustomImageListView::findMatchingPositionInNextCategory(const QString& /*currentCategory*/, const QString& nextCategory)
+{
+    int currentItemPosition = getCurrentItemPositionInCategory();
+    int targetIndex = -1;
+    int itemCount = 0;
+    
+    for (int i = 0; i < m_imageData.size(); i++) {
+        if (m_imageData[i].category == nextCategory) {
+            if (itemCount == currentItemPosition) {
+                targetIndex = i;
+                break;
+            }
+            itemCount++;
+        }
+    }
+    
+    // If no exact match found, take first item in next category
+    if (targetIndex == -1) {
+        for (int i = 0; i < m_imageData.size(); i++) {
+            if (m_imageData[i].category == nextCategory) {
+                targetIndex = i;
+                break;
+            }
+        }
+    }
+    
+    return targetIndex;
+}
+
+void CustomImageListView::preloadRowTextures(const QString& category)
+{
+    int currentPosition = getCurrentItemPositionInCategory();
+    int preloadCount = 5;  // Number of items to preload in each direction
+    
+    // Find visible range in the category
+    int visibleStart = qMax(0, currentPosition - preloadCount);
+    int itemCount = 0;
+    
+    for (int i = 0; i < m_imageData.size(); i++) {
+        if (m_imageData[i].category == category) {
+            if (itemCount >= visibleStart && itemCount <= currentPosition + preloadCount) {
+                if (!m_nodes.contains(i)) {
+                    loadImage(i);
+                }
+            }
+            itemCount++;
+        }
+    }
+    
+    // Clean up old textures if needed
+    if (m_nodes.size() > CLEANUP_THRESHOLD) {
+        recycleOffscreenTextures();
     }
 }
 
@@ -1603,6 +1791,7 @@ qreal CustomImageListView::calculateItemVerticalPosition(int index)
 
     qreal position = 0;
     QString targetCategory = m_imageData[index].category;
+    bool isLastCategory = (m_rowTitles.indexOf(targetCategory) == m_rowTitles.size() - 1);
     
     for (const QString &category : m_rowTitles) {
         CategoryDimensions dims = getDimensionsForCategory(category);
@@ -1616,6 +1805,10 @@ qreal CustomImageListView::calculateItemVerticalPosition(int index)
         position += m_titleHeight;
 
         if (category == targetCategory) {
+            // For last category, ensure the entire row height is considered
+            if (isLastCategory) {
+                position = qMin(position, contentHeight() - dims.rowHeight - m_titleHeight);
+            }
             break;
         }
 
@@ -1626,51 +1819,6 @@ qreal CustomImageListView::calculateItemVerticalPosition(int index)
     return position;
 }
 
-void CustomImageListView::ensureIndexVisible(int index)
-{
-    if (index < 0 || index >= m_imageData.size()) {
-        return;
-    }
-
-    QString targetCategory = m_imageData[index].category;
-    CategoryDimensions dims = getDimensionsForCategory(targetCategory);
-    
-    // Calculate vertical position
-    qreal targetY = calculateItemVerticalPosition(index);
-    
-    // Center vertically with proper offset
-    qreal centerOffset = (height() - dims.posterHeight) / 2;
-    qreal newContentY = targetY - centerOffset;
-    
-    // Bound the scroll position
-    newContentY = qBound(0.0, newContentY, qMax(0.0, contentHeight() - height()));
-    setContentY(newContentY);
-    
-    // Handle horizontal scrolling
-    int itemsBeforeInCategory = 0;
-    for (int i = 0; i < index; i++) {
-        if (m_imageData[i].category == targetCategory) {
-            itemsBeforeInCategory++;
-        }
-    }
-    
-    // Calculate x position considering item dimensions
-    qreal xOffset = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
-    
-    // Center the item horizontally with proper offset
-    qreal targetX = xOffset - (width() - dims.posterWidth) / 2;
-    
-    // Add extra space to ensure focus border is visible
-    qreal extraSpace = 10; // Pixels for focus border visibility
-    
-    // Calculate maximum scroll considering item width and spacing
-    qreal maxScroll = categoryContentWidth(targetCategory) - width();
-    
-    // Bound the scroll position with extra space consideration
-    targetX = qBound(0.0, targetX, maxScroll + extraSpace);
-    
-    setCategoryContentX(targetCategory, targetX);
-}
 
 // Add helper method to calculate category width
 qreal CustomImageListView::categoryContentWidth(const QString& category) const
@@ -1762,12 +1910,16 @@ void CustomImageListView::setContentX(qreal x)
 
 void CustomImageListView::setContentY(qreal y)
 {
-    if (m_contentY != y) {
-        m_contentY = y;
-        
-        // Add this call to check visibility on scroll
+    // Calculate the maximum allowed scroll position
+    qreal maxScroll = contentHeight() - height();
+    
+    // Ensure we don't scroll past the bottom plus padding
+    qreal paddedY = qMin(y, maxScroll + 50); // Add extra padding for focus effects
+    
+    if (m_contentY != paddedY) {
+        m_contentY = paddedY;
+        emit contentYChanged();
         handleContentPositionChange();
-        
         update();
     }
 }
@@ -1777,45 +1929,44 @@ qreal CustomImageListView::contentWidth() const
     return m_itemsPerRow * m_itemWidth + (m_itemsPerRow - 1) * m_spacing;
 }
 
-// Update contentHeight calculation for tighter spacing
+// Modified content height with extra padding for last row
 qreal CustomImageListView::contentHeight() const
 {
     qreal totalHeight = 0;
     
-    // Add minimal initial padding
-    totalHeight += m_rowSpacing / 2;  // Reduced padding
+    // Initial padding
+    totalHeight += m_rowSpacing / 5;
     
     for (int categoryIndex = 0; categoryIndex < m_rowTitles.size(); ++categoryIndex) {
-        // Add minimal spacing between categories
+        // Add spacing between categories
         if (categoryIndex > 0) {
-            totalHeight += m_rowSpacing;  // Reduced from double spacing
+            totalHeight += m_rowSpacing * 0.3;
         }
 
-        // Add category title height
         totalHeight += m_titleHeight;
 
         QString categoryName = m_rowTitles[categoryIndex];
+        CategoryDimensions dims = getDimensionsForCategory(categoryName);
         int categoryImageCount = 0;
+        
         for (const ImageData &imgData : m_imageData) {
             if (imgData.category == categoryName) {
                 categoryImageCount++;
             }
         }
 
-        // Calculate rows needed for this category
-        int rowsInCategory = (categoryImageCount + m_itemsPerRow - 1) / m_itemsPerRow;
+        // Add height for each category's contents
+        totalHeight += dims.posterHeight;
         
-        // Add height for all rows in this category
-        totalHeight += rowsInCategory * m_itemHeight;
-        
-        // Add minimal spacing between rows within category
-        if (rowsInCategory > 1) {
-            totalHeight += (rowsInCategory - 1) * (m_rowSpacing / 2);  // Reduced internal row spacing
+        // Add extra padding for last category to ensure focus effects are visible
+        if (categoryIndex == m_rowTitles.size() - 1) {
+            // Add 50% of poster height as extra padding for the last row
+            totalHeight += dims.posterHeight * 0.5;
         }
     }
 
-    // Add minimal padding at bottom
-    totalHeight += m_rowSpacing / 2;  // Reduced padding
+    // Add bottom padding plus extra space to ensure last row can be scrolled into view
+    totalHeight += m_rowSpacing + 50;
     
     return totalHeight;
 }
@@ -1929,15 +2080,25 @@ void CustomImageListView::loadFromJson(const QUrl &source)
     }
 }
 
-// Update loadUISettings method
+// Update loadUISettings method to add more debugging for transparency
 void CustomImageListView::loadUISettings()
 {
     QString settingsPath = ":/data/uiSettings.json";
     QFile settingsFile(settingsPath);
     
+    qDebug() << "Loading UI settings from:" << settingsPath;
+    
     if (settingsFile.open(QIODevice::ReadOnly)) {
-        QJsonDocument doc = QJsonDocument::fromJson(settingsFile.readAll());
+        QByteArray jsonData = settingsFile.readAll();
         settingsFile.close();
+        
+        QJsonParseError parseError;
+        QJsonDocument doc = QJsonDocument::fromJson(jsonData, &parseError);
+        
+        if (parseError.error != QJsonParseError::NoError) {
+            qWarning() << "JSON parse error:" << parseError.errorString();
+            return;
+        }
         
         if (doc.isObject()) {
             QJsonObject root = doc.object();
@@ -1945,28 +2106,158 @@ void CustomImageListView::loadUISettings()
             QJsonObject stbConfig = uiConfig["STB"].toObject();
             QJsonObject kv3Config = stbConfig["kv3"].toObject();
             
-            // Get swimlane configuration
-            QJsonObject swimlaneConfig = kv3Config["swimlaneSizeConfiguration"].toObject();
-            QJsonObject posterWithMetaData = swimlaneConfig["posterWithMetaData"].toObject();
-            
-            // Load category-specific dimensions with reduced spacing
-            if (posterWithMetaData.contains("portraitType1")) {
-                QJsonObject portraitConfig = posterWithMetaData["portraitType1"].toObject();
-                
-                CategoryDimensions dims;
-                dims.rowHeight = portraitConfig["height"].toInt(240);      // Reduced from 284
-                dims.posterHeight = portraitConfig["posterHeight"].toInt(200); // Reduced from 228
-                dims.posterWidth = portraitConfig["posterWidth"].toInt(152);
-                dims.itemSpacing = 10;  // Reduced from 15
-                
-                m_categoryDimensions["Bein Series"] = dims;
+            // Get row spacing from configuration
+            if (kv3Config.contains("rowSpacing")) {
+                setRowSpacing(kv3Config["rowSpacing"].toInt());
+                qDebug() << "Setting row spacing from JSON:" << m_rowSpacing;
+            } else {
+                qDebug() << "No rowSpacing in JSON, using default:" << m_rowSpacing;
             }
             
-            // Set reduced row spacing
-            setRowSpacing(15);  // Reduced from 20
+            // Get row title configuration
+            QJsonObject rowTitleConfig = kv3Config["rowTitle"].toObject();
+            if (rowTitleConfig.contains("Height")) {
+                m_titleHeight = rowTitleConfig["Height"].toInt();
+                qDebug() << "Setting title height from JSON:" << m_titleHeight;
+            } else {
+                qDebug() << "No title height in JSON, using default:" << m_titleHeight;
+            }
             
-            // Set reduced row title height
-            m_titleHeight = 30; // Reduced from 30
+            // Get swimlane configuration - process in order of priority
+            QJsonObject swimlaneConfig = kv3Config["swimlaneSizeConfiguration"].toObject();
+            
+            // Process poster config first (these are base values)
+            if (swimlaneConfig.contains("poster")) {
+                qDebug() << "Processing 'poster' configuration";
+                processSwimlaneDimensions(swimlaneConfig["poster"].toObject());
+            }
+            
+            // Process posterWithMetaData config second (these take precedence)
+            if (swimlaneConfig.contains("posterWithMetaData")) {
+                qDebug() << "Processing 'posterWithMetaData' configuration";
+                processSwimlaneDimensions(swimlaneConfig["posterWithMetaData"].toObject());
+            }
+            
+            // Final dimensions summary
+            qDebug() << "Final UI dimensions:";
+            qDebug() << " - Row spacing:" << m_rowSpacing;
+            qDebug() << " - Title height:" << m_titleHeight;
+            qDebug() << " - Default item dimensions - Width:" << m_itemWidth 
+                     << "Height:" << m_itemHeight << "Spacing:" << m_spacing;
+            
+            // Dump all category dimensions for debugging
+            qDebug() << "Category dimensions:";
+            for (auto it = m_categoryDimensions.constBegin(); it != m_categoryDimensions.constEnd(); ++it) {
+                qDebug() << " - " << it.key() << ":"
+                         << "posterWidth=" << it.value().posterWidth
+                         << "posterHeight=" << it.value().posterHeight
+                         << "rowHeight=" << it.value().rowHeight
+                         << "spacing=" << it.value().itemSpacing;
+            }
+        } else {
+            qWarning() << "JSON document is not an object";
+        }
+    } else {
+        qWarning() << "Failed to load UI settings file:" << settingsFile.errorString();
+        
+        // Default fallback values with reduced spacing
+        setRowSpacing(6);  // Further reduced from 9 to 6
+        setItemWidth(240);  // From landscapeType2
+        setItemHeight(135); // From landscapeType2
+        setSpacing(24);     // From landscapeType2
+        m_titleHeight = 15;  // Further reduced from 20 to 15
+        
+        // Create default dimensions using values from the spec
+        CategoryDimensions landscapeDims;
+        landscapeDims.rowHeight = 131;  // Further reduced from 133 to 131
+        landscapeDims.posterHeight = 135;
+        landscapeDims.posterWidth = 240;
+        landscapeDims.itemSpacing = 24;
+        
+        CategoryDimensions portraitDims;
+        portraitDims.rowHeight = 224;  // Further reduced from 226 to 224
+        portraitDims.posterHeight = 228;
+        portraitDims.posterWidth = 152;
+        portraitDims.itemSpacing = 24;
+        
+        // Apply default dimensions to categories
+        m_categoryDimensions["TV Channels"] = landscapeDims;
+        m_categoryDimensions["Live TV"] = landscapeDims;
+        m_categoryDimensions["TV Shows"] = portraitDims;
+        m_categoryDimensions["Movies"] = portraitDims;
+        m_categoryDimensions["Bein Series"] = portraitDims;
+        
+        qDebug() << "Using default hardcoded dimensions based on spec";
+    }
+}
+
+// Update processSwimlaneDimensions method to directly use the exact values from the JSON
+void CustomImageListView::processSwimlaneDimensions(const QJsonObject &swimlaneObj)
+{
+    if (swimlaneObj.isEmpty()) {
+        return;
+    }
+    
+    qDebug() << "Processing swimlane dimensions from JSON...";
+    
+    // Map the JSON type names to actual content category names
+    QMap<QString, QString> categoryMapping = {
+        {"default", "Default"},
+        {"landscapeType1", "TV Channels"},
+        {"landscapeType2", "Live Channels"},
+        {"portraitType1", "Movies"},
+        {"heroBanner", "Featured"},
+        {"settings", "Settings"},
+        {"landScapeTypeChannelInfo", "On Demand"}
+    };
+    
+    // Process each type defined in the JSON
+    for (auto it = swimlaneObj.constBegin(); it != swimlaneObj.constEnd(); ++it) {
+        QString type = it.key();
+        QJsonObject typeConfig = it.value().toObject();
+        
+        if (typeConfig.isEmpty()) {
+            qDebug() << "Empty config for type:" << type;
+            continue;
+        }
+        
+        // Use the exact values from JSON without modifications
+        CategoryDimensions dims;
+        dims.rowHeight = typeConfig["height"].toInt();
+        dims.posterHeight = typeConfig["posterHeight"].toInt();
+        dims.posterWidth = typeConfig["posterWidth"].toInt();
+        dims.itemSpacing = typeConfig["itemSpacing"].toDouble();
+        
+        // Map the JSON type to a category name
+        QString categoryName = categoryMapping.value(type, type);
+        m_categoryDimensions[categoryName] = dims;
+        
+        qDebug() << "Set dimensions for" << categoryName << "from" << type << ":"
+                 << "height=" << dims.rowHeight
+                 << "posterHeight=" << dims.posterHeight
+                 << "posterWidth=" << dims.posterWidth
+                 << "spacing=" << dims.itemSpacing;
+        
+        // For the default type, set the global item dimensions
+        if (type == "default") {
+            setItemWidth(dims.posterWidth);
+            setItemHeight(dims.posterHeight);
+            setSpacing(dims.itemSpacing);
+            
+            qDebug() << "Set default item dimensions - Width:" << dims.posterWidth
+                     << "Height:" << dims.posterHeight
+                     << "Spacing:" << dims.itemSpacing;
+        }
+        
+        // Apply specific dimensions for other content types using exact values
+        // from the JSON - This ensures we respect the designer's intentions
+        if (type == "portraitType1") {
+            m_categoryDimensions["Bein Series"] = dims;
+            m_categoryDimensions["TV Shows"] = dims;
+        }
+        else if (type == "landscapeType2") {
+            m_categoryDimensions["TV Channels"] = dims;
+            m_categoryDimensions["Live TV"] = dims;
         }
     }
 }
@@ -2152,7 +2443,6 @@ void CustomImageListView::setupNetworkManager()
     if (!m_networkManager) return;
     
     // Configure network settings for embedded systems
-    m_networkManager->setConfiguration(QNetworkConfiguration());
     m_networkManager->setNetworkAccessible(QNetworkAccessManager::Accessible);
     
     // Enable SSL/HTTPS support
@@ -2166,71 +2456,34 @@ void CustomImageListView::setupNetworkManager()
 
 void CustomImageListView::setupScrollAnimation()
 {
-    // Create a reusable animation object for vertical scrolling
+    // Create a reusable animation object
     m_scrollAnimation = new QPropertyAnimation(this);
-    m_scrollAnimation->setDuration(300);
+    m_scrollAnimation->setDuration(300);  // 300ms duration
     m_scrollAnimation->setEasingCurve(QEasingCurve::OutCubic);
-    
-    // Initialize dynamic property for both directions
-    setProperty("contentX", QVariant(0.0));
-    setProperty("contentY", QVariant(0.0));
 }
 
 void CustomImageListView::animateScroll(const QString& category, qreal targetX)
 {
-    // Stop any existing animation first
+    // Stop any existing animation
     stopCurrentAnimation();
-    
-    // Ensure we don't exceed bounds
-    targetX = qBound(0.0, targetX, qMax(0.0, categoryContentWidth(category) - width()));
     
     // Create a new animation for this category if it doesn't exist
     if (!m_categoryAnimations.contains(category)) {
         QPropertyAnimation* anim = new QPropertyAnimation(this);
         anim->setDuration(300);
         anim->setEasingCurve(QEasingCurve::OutCubic);
-        
-        // We need a unique property name that doesn't include special characters
-        QString propName = "scrollPos_" + QString::number(qHash(category));
-        
-        // Initialize the dynamic property
-        setProperty(propName.toLatin1().constData(), getCategoryContentX(category));
-        
-        // Configure animation
-        anim->setTargetObject(this);
-        anim->setPropertyName(propName.toLatin1());
-        
-        // Store the hash and category in the animation object
-        anim->setProperty("categoryHash", qHash(category));
-        anim->setProperty("category", category);
-        
-        // Connect using old-style signal/slot for Qt 5.6 compatibility
-        connect(anim, SIGNAL(valueChanged(QVariant)), this, SLOT(onScrollAnimationValueChanged(QVariant)));
-        
         m_categoryAnimations[category] = anim;
+        
+        // Connect animation to update the scroll position
+        connect(anim, &QPropertyAnimation::valueChanged, this, [this, category](const QVariant& value) {
+            setCategoryContentX(category, value.toReal());
+        });
     }
     
-    // Get the animation for this category
     QPropertyAnimation* anim = m_categoryAnimations[category];
-    if (!anim) return;
-    
-    // Update the property before starting the animation
-    QString propName = "scrollPos_" + QString::number(qHash(category));
-    setProperty(propName.toLatin1().constData(), getCategoryContentX(category));
-    
-    // Ensure animation is stopped
-    if (anim->state() == QPropertyAnimation::Running) {
-        anim->stop();
-    }
-    
-    // Configure and start
-    anim->setStartValue(QVariant(getCategoryContentX(category)));
-    anim->setEndValue(QVariant(targetX));
-    
-    qDebug() << "Starting scroll animation for category:" << category 
-             << "from:" << getCategoryContentX(category) 
-             << "to:" << targetX;
-             
+    anim->stop();
+    anim->setStartValue(getCategoryContentX(category));
+    anim->setEndValue(targetX);
     anim->start();
 }
 
@@ -2271,30 +2524,6 @@ void CustomImageListView::setEnableTextureMetrics(bool enable)
     }
 }
 
-void CustomImageListView::handleContentPositionChange()
-{
-    // Don't proceed if we're being destroyed
-    if (m_isBeingDestroyed) {
-        return;
-    }
-    
-    // Update loading priorities based on new visible area
-    QVector<int> visibleIndices = getVisibleIndices();
-    
-    // Prioritize loading visible images first
-    for (int index : visibleIndices) {
-        if (index >= 0 && index < m_imageData.size() && !m_nodes.contains(index)) {
-            // Use a short delay to avoid blocking UI during scrolling
-            QTimer::singleShot(10, this, [this, index]() {
-                if (!m_isBeingDestroyed) {
-                    loadImage(index);
-                }
-            });
-        }
-    }
-}
-
-// Fix the safeCleanup method - ensuring it's complete
 void CustomImageListView::safeCleanup()
 {
     // Use a static guard to prevent reentrant calls
@@ -2402,25 +2631,483 @@ void CustomImageListView::safeCleanup()
     cleaningInProgress = false;
 }
 
-void CustomImageListView::animateVerticalScroll(qreal targetY)
+void CustomImageListView::onNetworkReplyFinished()
 {
-    // Stop any running vertical animations
-    if (m_scrollAnimation && m_scrollAnimation->state() == QPropertyAnimation::Running) {
-        m_scrollAnimation->stop();
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    
+    int index = -1;
+    
+    // Get the index for this reply with minimal lock time
+    {
+        QMutexLocker locker(&m_networkMutex);
+        index = m_pendingRequests.key(reply, -1);
+        
+        // Remove from pending requests while under lock
+        if (index != -1) {
+            m_pendingRequests.remove(index);
+        }
     }
     
-    // Ensure we don't exceed bounds
-    targetY = qBound(0.0, targetY, qMax(0.0, contentHeight() - height()));
-    
-    // Configure the animation
-    m_scrollAnimation->setTargetObject(this);
-    m_scrollAnimation->setPropertyName("contentY");
-    m_scrollAnimation->setStartValue(m_contentY);
-    m_scrollAnimation->setEndValue(targetY);
-    
-    qDebug() << "Starting vertical scroll animation from:" << m_contentY << "to:" << targetY;
-    
-    // Start the animation
-    m_scrollAnimation->start();
+    // Process the reply outside of mutex lock to avoid deadlocks
+    if (index == -1) {
+        reply->deleteLater();
+        return;
+    }
+
+    if (reply->error() == QNetworkReply::NoError) {
+        QByteArray data = reply->readAll();
+        if (!data.isEmpty()) {
+            QImage image;
+            if (image.loadFromData(data)) {
+                m_urlImageCache.insert(reply->url(), image);
+                processLoadedImage(index, image);
+            } else {
+                createFallbackTexture(index);
+            }
+        } else {
+            createFallbackTexture(index);
+        }
+    } else {
+        createFallbackTexture(index);
+    }
+
+    reply->deleteLater();
 }
 
+void CustomImageListView::onNetworkError(QNetworkReply::NetworkError code)
+{
+    Q_UNUSED(code); // Silence unused parameter warning
+    
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+    
+    int index = -1;
+    
+    // Find the index with minimal lock time
+    {
+        QMutexLocker locker(&m_networkMutex);
+        index = m_pendingRequests.key(reply, -1);
+        if (index != -1) {
+            m_pendingRequests.remove(index);
+        }
+    }
+    
+    // Process outside the lock
+    if (index != -1) {
+        createFallbackTexture(index);
+    }
+    
+    reply->deleteLater();
+}
+
+void CustomImageListView::onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal)
+{
+    QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+    if (!reply) return;
+
+    int index = -1;
+    
+    {
+        QMutexLocker locker(&m_networkMutex);
+        index = m_pendingRequests.key(reply, -1);
+    }
+    
+    if (index != -1) {
+        qDebug() << "Download progress for index" << index << ":"
+                 << bytesReceived << "/" << bytesTotal << "bytes";
+    }
+}
+
+void CustomImageListView::onScrollAnimationValueChanged(const QVariant &value)
+{
+    QPropertyAnimation *anim = qobject_cast<QPropertyAnimation*>(sender());
+    if (!anim) return;
+    
+    // Get the category associated with this animation
+    QString category = anim->property("category").toString();
+    if (category.isEmpty()) return;
+    
+    // Update the category scroll position
+    setCategoryContentX(category, value.toReal());
+}
+
+void CustomImageListView::updateMetricCounts(int nodes, int textures)
+{
+    if (m_totalNodeCount != nodes || m_textureCount != textures) {
+        m_totalNodeCount = nodes;
+        m_textureCount = textures;
+        // Emit debug information
+        qDebug() << "Scene Graph Metrics Updated - Nodes:" << m_totalNodeCount 
+                 << "Textures:" << m_textureCount;
+    }
+}
+
+CustomImageListView::CategoryDimensions CustomImageListView::getDimensionsForCategory(const QString& category) const
+{
+    // Check if we have custom dimensions for this category
+    if (m_categoryDimensions.contains(category)) {
+        return m_categoryDimensions.value(category);
+    }
+    
+    // Return default dimensions for categories without custom settings
+    CategoryDimensions defaultDims;
+    defaultDims.rowHeight = m_itemHeight + 10; // Add some padding
+    defaultDims.posterHeight = m_itemHeight;
+    defaultDims.posterWidth = m_itemWidth;
+    defaultDims.itemSpacing = m_spacing;
+    
+    return defaultDims;
+}
+
+int CustomImageListView::countNodes(QSGNode *root)
+{
+    if (!root) {
+        return 0;
+    }
+
+    int total = 1; // Count the current node
+    for (QSGNode *child = root->firstChild(); child; child = child->nextSibling()) {
+        total += countNodes(child);
+    }
+    return total;
+}
+
+int CustomImageListView::countTotalTextures(QSGNode *root)
+{
+    QSet<QSGTexture *> textures;
+    collectTextures(root, textures);
+    return textures.size();
+}
+
+void CustomImageListView::collectTextures(QSGNode *node, QSet<QSGTexture *> &textures)
+{
+    if (!node) return;
+
+    // Check geometry node materials
+    if (node->type() == QSGNode::GeometryNodeType) {
+        QSGGeometryNode *geometryNode = static_cast<QSGGeometryNode*>(node);
+        QSGMaterial *mat = geometryNode->activeMaterial();
+        if (mat) {
+            // QSGTextureMaterial
+            QSGTextureMaterial *texMat = dynamic_cast<QSGTextureMaterial*>(mat);
+            if (texMat && texMat->texture()) {
+                textures.insert(texMat->texture());
+            }
+            // QSGOpaqueTextureMaterial
+            QSGOpaqueTextureMaterial *opaqueTexMat = dynamic_cast<QSGOpaqueTextureMaterial*>(mat);
+            if (opaqueTexMat && opaqueTexMat->texture()) {
+                textures.insert(opaqueTexMat->texture());
+            }
+        }
+    }
+
+    // Check QSGSimpleTextureNode
+    QSGSimpleTextureNode *simpleTex = dynamic_cast<QSGSimpleTextureNode*>(node);
+    if (simpleTex && simpleTex->texture()) {
+        textures.insert(simpleTex->texture());
+    }
+
+    // Recurse through children
+    for (QSGNode *child = node->firstChild(); child; child = child->nextSibling()) {
+        collectTextures(child, textures);
+    }
+}
+
+void CustomImageListView::recycleOffscreenTextures()
+{
+    QMutexLocker locker(&m_loadMutex);
+    
+    QList<int> indicesToRemove;
+    
+    // First pass: mark textures from non-visible categories for removal
+    for (auto it = m_nodes.begin(); it != m_nodes.end(); ++it) {
+        int index = it.key();
+        if (index < m_imageData.size()) {
+            QString category = m_imageData[index].category;
+            if (!m_visibleCategories.contains(category)) {
+                indicesToRemove.append(index);
+            }
+        }
+    }
+    
+    // Second pass: if we still have too many textures, remove oldest non-visible ones
+    if (m_nodes.size() > CLEANUP_THRESHOLD) {
+        for (auto it = m_nodes.begin(); it != m_nodes.end(); ++it) {
+            int index = it.key();
+            if (!m_visibleIndices.contains(index) && !indicesToRemove.contains(index)) {
+                // Check if this texture is from a visible category but off-screen
+                QString category = m_imageData[index].category;
+                if (m_visibleCategories.contains(category)) {
+                    // Keep textures close to visible area
+                    CategoryDimensions dims = getDimensionsForCategory(category);
+                    qreal itemX = getCategoryContentX(category);
+                    if (itemX < -dims.posterWidth * 2 || itemX > width() + dims.posterWidth * 2) {
+                        indicesToRemove.append(index);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Remove marked textures
+    for (int index : indicesToRemove) {
+        cleanupNode(m_nodes[index]);
+        m_nodes.remove(index);
+        m_textureUsageQueue.removeOne(index);
+    }
+}
+
+void CustomImageListView::cacheTexture(int index, QSGTexture* texture)
+{
+    // Update usage queue
+    m_textureUsageQueue.removeAll(index);
+    m_textureUsageQueue.enqueue(index);
+    
+    // Store texture
+    TexturedNode node;
+    node.texture = texture;
+    node.node = nullptr;
+    m_nodes[index] = node;
+}
+
+int CustomImageListView::getCurrentItemPositionInCategory() const
+{
+    // Return 0 if no valid current index
+    if (m_currentIndex < 0 || m_currentIndex >= m_imageData.size()) {
+        return 0;
+    }
+
+    // Get current category
+    QString currentCategory = m_imageData[m_currentIndex].category;
+    int position = 0;
+
+    // Count items in same category up to current index
+    for (int i = 0; i < m_currentIndex; i++) {
+        if (m_imageData[i].category == currentCategory) {
+            position++;
+        }
+    }
+
+    return position;
+}
+
+// Add this helper method
+bool CustomImageListView::shouldJumpToLastRow(int currentIndex) const
+{
+    if (currentIndex < 0 || currentIndex >= m_imageData.size()) {
+        return false;
+    }
+
+    QString currentCategory = m_imageData[currentIndex].category;
+    int categoryIndex = m_rowTitles.indexOf(currentCategory);
+    
+    // Get number of items in current category
+    int totalItemsInCategory = 0;
+    int currentPositionInCategory = 0;
+    
+    for (int i = 0; i < m_imageData.size(); i++) {
+        if (m_imageData[i].category == currentCategory) {
+            totalItemsInCategory++;
+            if (i <= currentIndex) {
+                currentPositionInCategory++;
+            }
+        }
+    }
+    
+    // Check if we're past halfway point in the current row
+    bool isPastHalfway = (currentPositionInCategory > totalItemsInCategory / 2);
+    
+    // Check if there's only one row remaining after current row
+    bool isOneRowRemaining = (categoryIndex == m_rowTitles.size() - 2);
+    
+    return isPastHalfway && isOneRowRemaining;
+}
+
+void CustomImageListView::ensureLastRowVisible(int targetIndex)
+{
+    CategoryDimensions dims = getDimensionsForCategory(m_imageData[targetIndex].category);
+    
+    // Calculate the maximum possible scroll position
+    qreal maxScroll = contentHeight() - height();
+    
+    // Always scroll to maximum position for last row
+    qreal desiredY = maxScroll;
+    
+    // Add extra padding to ensure the entire row and focus effects are visible
+    desiredY += dims.posterHeight * 0.1;  // Add 10% of poster height as padding
+    
+    // Apply animation with bounds checking
+    QPropertyAnimation* anim = new QPropertyAnimation(this, "contentY");
+    anim->setDuration(300);
+    anim->setEasingCurve(QEasingCurve::OutCubic);
+    anim->setStartValue(m_contentY);
+    anim->setEndValue(desiredY);
+    
+    // Update selection only after animation completes
+    connect(anim, &QPropertyAnimation::finished, this, [this, targetIndex]() {
+        setCurrentIndex(targetIndex);
+        ensureFocus();
+        
+        // Force a final position check
+        QTimer::singleShot(50, this, [this]() {
+            // Ensure we're at the very bottom
+            setContentY(contentHeight() - height());
+            update();
+        });
+    });
+    
+    connect(anim, &QPropertyAnimation::finished, anim, &QPropertyAnimation::deleteLater);
+    anim->start();
+    
+    // Preload textures for last row
+    QString category = m_imageData[targetIndex].category;
+    m_visibleCategories.insert(category);
+    preloadRowTextures(category);
+}
+
+// Add this helper method for animation
+void CustomImageListView::animateToPosition(int targetIndex, qreal desiredY)
+{
+    QPropertyAnimation* anim = new QPropertyAnimation(this, "contentY");
+    anim->setDuration(300);
+    anim->setEasingCurve(QEasingCurve::OutCubic);
+    anim->setStartValue(m_contentY);
+    anim->setEndValue(qMax(0.0, desiredY));
+    
+    connect(anim, &QPropertyAnimation::finished, this, [this, targetIndex]() {
+        setCurrentIndex(targetIndex);
+        ensureFocus();
+        update();
+    });
+    
+    connect(anim, &QPropertyAnimation::finished, anim, &QPropertyAnimation::deleteLater);
+    anim->start();
+    
+    // Preload textures
+    QString category = m_imageData[targetIndex].category;
+    m_visibleCategories.insert(category);
+    QTimer::singleShot(0, this, [this, category]() {
+        preloadRowTextures(category);
+    });
+}
+
+// Add new helper method to force immediate texture loading for visible items
+void CustomImageListView::loadVisibleTextures()
+{
+    // Use a wider buffer to improve loading when navigating
+    QVector<int> visibleIndices = getVisibleIndices(0.8); // 80% buffer (larger than default)
+    
+    for (int index : visibleIndices) {
+        if (!m_nodes.contains(index)) {
+            // Use a shorter delay to ensure quick loading
+            QTimer::singleShot(5, this, [this, index]() {
+                if (!m_isBeingDestroyed) {
+                    loadImage(index);
+                }
+            });
+        }
+    }
+    
+    // Also preload for current category and neighboring categories
+    if (m_currentIndex >= 0 && m_currentIndex < m_imageData.size()) {
+        QString currentCategory = m_imageData[m_currentIndex].category;
+        int categoryIndex = m_rowTitles.indexOf(currentCategory);
+        
+        // Preload current category
+        preloadRowTextures(currentCategory);
+        
+        // Preload category above (if exists)
+        if (categoryIndex > 0) {
+            preloadRowTextures(m_rowTitles[categoryIndex - 1]);
+        }
+        
+        // Preload category below (if exists)
+        if (categoryIndex < m_rowTitles.size() - 1) {
+            preloadRowTextures(m_rowTitles[categoryIndex + 1]);
+        }
+    }
+}
+
+// Add this overloaded method for more flexibility in buffer size
+QVector<int> CustomImageListView::getVisibleIndices(qreal bufferFactor)
+{
+    QVector<int> visibleIndices;
+    
+    if (width() <= 0 || height() <= 0) {
+        return visibleIndices;
+    }
+    
+    // Calculate buffer size based on provided factor
+    qreal bufferSize = height() * bufferFactor; 
+    qreal viewportTop = m_contentY - bufferSize;
+    qreal viewportBottom = m_contentY + height() + bufferSize;
+    
+    qreal currentY = 0;
+    int currentIndex = 0;
+    
+    // Iterate through categories
+    for (int categoryIndex = 0; categoryIndex < m_rowTitles.size(); ++categoryIndex) {
+        QString categoryName = m_rowTitles[categoryIndex];
+        CategoryDimensions dims = getDimensionsForCategory(categoryName);
+        
+        // Add title height
+        currentY += m_titleHeight + 10;
+        
+        // Skip if entire category is below viewport
+        if (currentY > viewportBottom) {
+            // Skip to next category after counting items in this one
+            for (const ImageData &imgData : m_imageData) {
+                if (imgData.category == categoryName) {
+                    currentIndex++;
+                }
+            }
+            // Add category height and continue
+            currentY += dims.rowHeight + m_rowSpacing;
+            continue;
+        }
+        
+        // Calculate category end position
+        qreal categoryEndY = currentY + dims.rowHeight;
+        
+        // Skip if entire category is above viewport
+        if (categoryEndY < viewportTop) {
+            // Skip this category
+            for (const ImageData &imgData : m_imageData) {
+                if (imgData.category == categoryName) {
+                    currentIndex++;
+                }
+            }
+            currentY = categoryEndY + m_rowSpacing;
+            continue;
+        }
+        
+        // Use a wider horizontal buffer for categories
+        qreal horizontalBuffer = width() * 0.5; // 50% of width as buffer
+        qreal xPos = m_startPositionX + 10;
+        qreal categoryX = xPos - getCategoryContentX(categoryName);
+        int itemsInThisCategory = 0;
+        
+        for (int i = 0; i < m_imageData.size(); i++) {
+            if (m_imageData[i].category == categoryName) {
+                // Use wider horizontal buffer for visibility check
+                if (currentY >= viewportTop - dims.posterHeight && 
+                    currentY <= viewportBottom + dims.posterHeight &&
+                    categoryX >= -dims.posterWidth - horizontalBuffer &&
+                    categoryX <= width() + dims.posterWidth + horizontalBuffer) {
+                    
+                    visibleIndices.append(currentIndex);
+                }
+                
+                categoryX += dims.posterWidth + dims.itemSpacing;
+                currentIndex++;
+                itemsInThisCategory++;
+            }
+        }
+        
+        // Move to next category
+        currentY = categoryEndY + m_rowSpacing;
+    }
+    
+    return visibleIndices;
+}

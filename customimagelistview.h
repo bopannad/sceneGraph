@@ -8,11 +8,12 @@
 #include <QNetworkAccessManager>
 #include <QMap>
 #include <QSGGeometryNode>
-#include <QImage>  // Add this include
+#include <QImage>
 #include <QSGSimpleTextureNode>
 #include <QSGTextureMaterial>
 #include <QSGOpaqueTextureMaterial>
 #include <QSGFlatColorMaterial>
+#include <QQueue>  // Add this include
 #include "texturebuffer.h"
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -21,17 +22,16 @@
 #include <QNetworkRequest>
 #include <QNetworkConfiguration>
 #include <QSslError>
-#include <QPropertyAnimation>  // Add this include
-#include <QSet>  // Add this include
-#include <QRunnable>  // Add this line to include QRunnable
+#include <QPropertyAnimation>
+#include <QSet>
+#include <QRunnable>
 #include <QPointer>
-
-
+#include <QFontMetrics>
 
 class QSGTexture;
 class QSGGeometry;
 
-// Add this better SafeNodeDeleter definition
+// SafeNodeDeleter definition
 class SafeNodeDeleter : public QRunnable {
     public:
         explicit SafeNodeDeleter(QSGNode* node) : m_node(node) {}
@@ -46,7 +46,7 @@ class SafeNodeDeleter : public QRunnable {
         QSGNode* m_node;
 };
 
-// Add this new batch deleter for multiple nodes
+// SafeNodeBatchDeleter definition
 class SafeNodeBatchDeleter : public QRunnable {
     public:
         explicit SafeNodeBatchDeleter(const QList<QSGNode*>& nodes) : m_nodes(nodes) {}
@@ -87,181 +87,18 @@ class CustomImageListView : public QQuickItem
     Q_PROPERTY(QStringList rowTitles READ rowTitles WRITE setRowTitles NOTIFY rowTitlesChanged)
     Q_PROPERTY(QUrl jsonSource READ jsonSource WRITE setJsonSource NOTIFY jsonSourceChanged)
     Q_PROPERTY(qreal startPositionX READ startPositionX WRITE setStartPositionX NOTIFY startPositionXChanged)
-    Q_PROPERTY(int nodeCount READ nodeCount CONSTANT)  // Simplified read-only property
-    Q_PROPERTY(int textureCount READ textureCount CONSTANT)  // Simplified read-only property
+    Q_PROPERTY(int nodeCount READ nodeCount CONSTANT)
+    Q_PROPERTY(int textureCount READ textureCount CONSTANT)
     Q_PROPERTY(bool enableNodeMetrics READ enableNodeMetrics WRITE setEnableNodeMetrics NOTIFY enableNodeMetricsChanged)
     Q_PROPERTY(bool enableTextureMetrics READ enableTextureMetrics WRITE setEnableTextureMetrics NOTIFY enableTextureMetricsChanged)
 
-private:
-    // Move ImageData struct definition to the top of the private section
-    struct ImageData {
-        QString url;
-        QString title;
-        QString category;
-        QString description;
-        QString id;
-        QString thumbnailUrl;
-        QMap<QString, QString> links;
-        
-        bool operator==(const ImageData& other) const {
-            return url == other.url && 
-                   title == other.title && 
-                   category == other.category && 
-                   id == other.id;
-        }
-    };
-
-    // Now we can use ImageData in member variables
-    QNetworkAccessManager* m_networkManager = nullptr;
-    QVector<ImageData> m_imageData;
-    qreal m_startPositionX = 0;  // Add this line for the start position
-    int m_count = 15;
-    qreal m_itemWidth = 200;
-    qreal m_itemHeight = 200;
-    qreal m_spacing = 10;          // Reduced from 15 to 10
-    qreal m_rowSpacing = 10;       // Reduced from 20 to 10
-    bool m_useLocalImages = false;
-    QString m_imagePrefix = "qrc:/images/";
-    QVariantList m_imageUrls;
-    QStringList m_imageTitles;
-    int m_currentIndex = 0;
-    QVariantList m_localImageUrls;
-    QVariantList m_remoteImageUrls;
-    int m_rowCount = 2;
-    qreal m_contentX = 0;
-    qreal m_contentY = 0;
-    QStringList m_rowTitles;
-    bool m_windowReady = false;
-    bool m_isDestroying = false;
-    bool m_isLoading = false;
-    int m_itemsPerRow = 5;
-    QUrl m_jsonSource;
-    QMutex m_loadMutex;
-    bool m_enableNodeMetrics = false;
-    bool m_enableTextureMetrics = false;
-
-    // Add new members for UI settings
-    int m_titleHeight = 25; // Reduced from 30 to 25
-    int m_maxRows = 4;
-
-    void addDefaultItems();  // Add this declaration
-    
-    // Add helper method declaration for category width calculation
-    qreal categoryContentWidth(const QString& category) const;
-
-    // Add new members for per-category scrolling
-    QMap<QString, qreal> m_categoryContentX;
-    QString m_currentCategory;
-    
-    // Add new helper methods
-    void setCategoryContentX(const QString& category, qreal x);
-    qreal getCategoryContentX(const QString& category) const;
-    void updateCurrentCategory();
-
-    // Add method declaration for index validation
-    void ensureValidIndex(int &index);
-
-    // Add network manager setup method declaration
-    void setupNetworkManager();
-
-    struct CategoryDimensions {
-        int rowHeight;
-        int posterHeight;
-        int posterWidth;
-        qreal itemSpacing;
-    };
-    
-    QMap<QString, CategoryDimensions> m_categoryDimensions;
-    
-    // Helper method to get dimensions for a category
-    CategoryDimensions getDimensionsForCategory(const QString& category) const {
-        return m_categoryDimensions.value(category, CategoryDimensions{180, 180, 280, 20});
-    }
-
-    // Add new member variables
-    QPropertyAnimation* m_scrollAnimation;
-    QMap<QString, QPropertyAnimation*> m_categoryAnimations;
-    
-    // Add helper method declarations
-    void setupScrollAnimation();
-    void animateScroll(const QString& category, qreal targetX);
-    void stopCurrentAnimation();
-
-    // Add member to store complete JSON document
-    QJsonObject m_parsedJson;  // Add this line
-
-    // Add flag to track destruction state
-    bool m_isBeingDestroyed = false;
-
-    // Add method for safe cleanup
-    void safeCleanup();
-
-    // Only keep track of node count
-    int m_nodeCount = 0;
-    int m_totalNodeCount = 0;  // Add this to store total node count
-    QAtomicInt m_textureCount = 0;  // Add this to store texture count
-
-    // Add helper method to count nodes recursively
-    int countNodes(QSGNode *root) {
-        if (!root)
-            return 0;
-
-        int total = 1; // count the current node
-        for (QSGNode *child = root->firstChild(); child; child = child->nextSibling()) {
-            total += countNodes(child);
-        }
-        return total;
-    }
-
-    // Modified version using QSet instead of std::unordered_set
-    void collectTextures(QSGNode *node, QSet<QSGTexture *> &textures) {
-        if (!node) return;
-
-        // Check geometry node materials
-        if (node->type() == QSGNode::GeometryNodeType) {
-            QSGGeometryNode *geometryNode = static_cast<QSGGeometryNode*>(node);
-            QSGMaterial *mat = geometryNode->activeMaterial();
-            if (mat) {
-                // QSGTextureMaterial
-                QSGTextureMaterial *texMat = dynamic_cast<QSGTextureMaterial*>(mat);
-                if (texMat && texMat->texture()) {
-                    textures.insert(texMat->texture());
-                }
-                // QSGOpaqueTextureMaterial
-                QSGOpaqueTextureMaterial *opaqueTexMat = dynamic_cast<QSGOpaqueTextureMaterial*>(mat);
-                if (opaqueTexMat && opaqueTexMat->texture()) {
-                    textures.insert(opaqueTexMat->texture());
-                }
-            }
-        }
-
-        // Check QSGSimpleTextureNode
-        QSGSimpleTextureNode *simpleTex = dynamic_cast<QSGSimpleTextureNode*>(node);
-        if (simpleTex && simpleTex->texture()) {
-            textures.insert(simpleTex->texture());
-        }
-
-        // Recurse through children
-        for (QSGNode *child = node->firstChild(); child; child = child->nextSibling()) {
-            collectTextures(child, textures);
-        }
-    }
-
-    // Modified version using QSet instead of std::unordered_set
-    int countTotalTextures(QSGNode *root) {
-        QSet<QSGTexture *> textures;
-        collectTextures(root, textures);
-        return textures.size();
-    }
-
-    // Add these new methods
-    QVector<int> getVisibleIndices();
-    void handleContentPositionChange();
-
-    // Add this declaration to the private section
-    void animateVerticalScroll(qreal targetY);
-
 public:
+    struct NavigationPosition {
+        QString category;
+        int relativePosition;
+        qreal scrollOffset;
+    };
+
     CustomImageListView(QQuickItem *parent = nullptr);
     ~CustomImageListView();
 
@@ -322,7 +159,6 @@ public:
     qreal startPositionX() const { return m_startPositionX; }
     void setStartPositionX(qreal x);
 
-    // Update accessors to get real-time counts
     int nodeCount() const { return m_totalNodeCount; }
     int textureCount() const { return m_textureCount; }
     
@@ -332,15 +168,7 @@ public:
     bool enableTextureMetrics() const { return m_enableTextureMetrics; }
     void setEnableTextureMetrics(bool enable);
 
-    // Add method to update metrics
-    void updateMetricCounts(int nodes, int textures) {
-        if (m_totalNodeCount != nodes || m_textureCount != textures) {
-            m_totalNodeCount = nodes;
-            m_textureCount = textures;
-            qDebug() << "Metrics updated - Nodes:" << m_totalNodeCount 
-                     << "Textures:" << m_textureCount;
-        }
-    }
+    void updateMetricCounts(int nodes, int textures);
 
 signals:
     void countChanged();
@@ -362,10 +190,10 @@ signals:
     void rowSpacingChanged();
     void rowTitlesChanged();
     void jsonSourceChanged();
-    void linkActivated(const QString& action, const QString& url);  // Add this signal
+    void linkActivated(const QString& action, const QString& url);
     void startPositionXChanged();
-    void moodImageSelected(const QString& url);  // Add this new signal
-    void assetFocused(const QJsonObject& assetData);  // Modified to pass complete JSON object
+    void moodImageSelected(const QString& url);
+    void assetFocused(const QJsonObject& assetData);
     void enableNodeMetricsChanged();
     void enableTextureMetricsChanged();
 
@@ -376,48 +204,28 @@ protected:
     void itemChange(ItemChange change, const ItemChangeData &data) override;
     void keyPressEvent(QKeyEvent *event) override;
     bool event(QEvent *e) override;
-    void mousePressEvent(QMouseEvent *event) override;  // Add this
+    void mousePressEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
 
 private:
-    QMutex m_networkMutex;
-    
-    // Add loadAllImages declaration with other loading-related methods
-    void loadAllImages();
-    QString generateImageUrl(int index) const;
-    QImage loadLocalImage(int index) const;
-    QImage loadLocalImageFromPath(const QString &path) const;
-    void loadImage(int index);
-    void loadUrlImage(int index, const QUrl &url);
-    void handleNetworkReply(QNetworkReply *reply, int index);
-    void processLoadedImage(int index, const QImage &image);
+    // Struct definitions
+    struct ImageData {
+        QString url;
+        QString title;
+        QString category;
+        QString description;
+        QString id;
+        QString thumbnailUrl;
+        QMap<QString, QString> links;
+        
+        bool operator==(const ImageData& other) const {
+            return url == other.url && 
+                   title == other.title && 
+                   category == other.category && 
+                   id == other.id;
+        }
+    };
 
-    void debugResourceSystem() const;  // Add this line
-    void tryLoadImages();
-    void updateFocus();
-    bool navigateLeft();
-    void navigateRight();
-    void ensureFocus();  // Add this
-    void navigateUp();
-    void navigateDown();
-    void ensureIndexVisible(int index);
-
-    // Remove static texture cache as TextureBuffer handles it
-
-    // Add new members for URL handling
-    QHash<int, QNetworkReply*> m_pendingRequests;
-    QHash<QUrl, QImage> m_urlImageCache;
-
-    int getRowFromIndex(int index) const { return index / m_itemsPerRow; }
-    int getColumnFromIndex(int index) const { return index % m_itemsPerRow; }
-
-    QSGGeometryNode* createRowTitleNode(const QString &text, const QRectF &rect);
-
-    void createFallbackTexture(int index);  // Add this declaration
-    bool isReadyForTextures() const;  // Add this declaration
-    void cleanupTextures();  // Add this declaration
-
-    // Add TexturedNode structure definition before it's used
     struct TexturedNode {
         TexturedNode() : node(nullptr), texture(nullptr) {}
         ~TexturedNode() {
@@ -429,122 +237,154 @@ private:
         QSGTexture *texture;
     };
 
-    void cleanupNode(TexturedNode& node);
+    struct CategoryDimensions {
+        int rowHeight;
+        int posterHeight;
+        int posterWidth;
+        qreal itemSpacing;
+    };
+
+    // Member variables
+    QNetworkAccessManager* m_networkManager = nullptr;
+    QVector<ImageData> m_imageData;
+    qreal m_startPositionX = 0;
+    int m_count = 15;
+    qreal m_itemWidth = 200;
+    qreal m_itemHeight = 200;
+    qreal m_spacing = 10;
+    qreal m_rowSpacing = 10;
+    bool m_useLocalImages = false;
+    QString m_imagePrefix = "qrc:/images/";
+    QVariantList m_imageUrls;
+    QStringList m_imageTitles;
+    int m_currentIndex = 0;
+    QVariantList m_localImageUrls;
+    QVariantList m_remoteImageUrls;
+    int m_rowCount = 2;
+    qreal m_contentX = 0;
+    qreal m_contentY = 0;
+    QStringList m_rowTitles;
+    bool m_windowReady = false;
+    bool m_isDestroying = false;
+    bool m_isLoading = false;
+    int m_itemsPerRow = 5;
+    QUrl m_jsonSource;
+    QMutex m_loadMutex;
+    bool m_enableNodeMetrics = false;
+    bool m_enableTextureMetrics = false;
+    int m_titleHeight = 25;
+    int m_maxRows = 4;
+    QMap<QString, qreal> m_categoryContentX;
+    QString m_currentCategory;
+    QMap<QString, CategoryDimensions> m_categoryDimensions;
+    QPropertyAnimation* m_scrollAnimation;
+    QMap<QString, QPropertyAnimation*> m_categoryAnimations;
+    QJsonObject m_parsedJson;
+    bool m_isBeingDestroyed = false;
+    int m_nodeCount = 0;
+    int m_totalNodeCount = 0;
+    QAtomicInt m_textureCount = 0;
+    QMutex m_networkMutex;
+    QHash<int, QNetworkReply*> m_pendingRequests;
+    QHash<QUrl, QImage> m_urlImageCache;
     QMap<int, TexturedNode> m_nodes;
+    QMap<QString, NavigationPosition> m_categoryPositions;
 
-    void limitTextureCacheSize(int maxTextures = 10);
-    void safeReleaseTextures();
-    bool ensureValidWindow() const;
+    // Texture management constants
+    static const int MAX_TEXTURE_CACHE = 20;  // Max textures to keep in memory
+    static const int MAX_VISIBLE_ROWS = 3;    // Maximum number of visible rows to keep in memory
+    static const int CLEANUP_THRESHOLD = MAX_VISIBLE_ROWS * 10;  // Cleanup threshold based on visible rows
     
-    static constexpr int MAX_LOADED_TEXTURES = 10;
+    QQueue<int> m_textureUsageQueue;    // Track texture usage order
+    QSet<int> m_visibleIndices;         // Currently visible indices
+    QSet<QString> m_visibleCategories;   // Track visible row categories
 
-    void loadFromJson(const QUrl &source);
-    void processJsonData(const QByteArray &data);
-
-    //QVector<ImageData> m_imageData;
-
-    // Organize all node creation methods together in one place
-    QSGGeometryNode* createTexturedRect(const QRectF &rect, QSGTexture *texture, bool isFocused = false);
-   // QSGGeometryNode* createRowTitleNode(const QString &text, const QRectF &rect);
-    QSGGeometryNode* createOptimizedTextNode(const QString &text, const QRectF &rect);
+    // Method declarations (one per method)
+    void addDefaultItems();
+    void ensureValidIndex(int &index);
+    void handleContentPositionChange();
+    void animateVerticalScroll(qreal targetY);
+    qreal calculateItemVerticalPosition(int index);
+    bool navigateLeft();
+    void navigateRight();
+    void navigateUp();
+    void navigateDown();
+    bool shouldJumpToLastRow(int currentIndex) const;  // Add this line
+    void handleKeyAction(Qt::Key key);
+    void ensureFocus();
+    void ensureIndexVisible(int index);
+    void cleanupNode(TexturedNode& node);
+    void limitTextureCacheSize(int maxTextures);
+    void cleanupTextures();
+    void safeReleaseTextures();
+    void safeCleanup();
+    void processLoadedImage(int index, const QImage &image);
+    void loadImage(int index);
+    void loadUrlImage(int index, const QUrl &url);
+    void createFallbackTexture(int index);
+    QImage loadLocalImageFromPath(const QString &path) const;
+    QImage loadLocalImage(int index) const;
+    QString generateImageUrl(int index) const;
+    bool isReadyForTextures() const;
+    void tryLoadImages();
+    void loadAllImages();
     void addSelectionEffects(QSGNode* container, const QRectF& rect);
     void addTitleOverlay(QSGNode* container, const QRectF& rect, const QString& title);
-
-    // Add new method declarations
+    void createTitleNode(const QString &text, const QRectF &rect);
+    QSGGeometryNode* createTexturedRect(const QRectF &rect, QSGTexture *texture, bool isFocused = false);
+    bool ensureValidWindow() const;
+    QSGGeometryNode* createOptimizedTextNode(const QString &text, const QRectF &rect);
+    QSGGeometryNode* createRowTitleNode(const QString &text, const QRectF &rect);
+    void loadFromJson(const QUrl &source);
     void loadUISettings();
+    void processJsonData(const QByteArray &data);
+    void debugResourceSystem() const;
+    qreal categoryContentWidth(const QString& category) const;
+    void setCategoryContentX(const QString& category, qreal x);
+    qreal getCategoryContentX(const QString& category) const;
+    void updateCurrentCategory();
+    void saveNavigationPosition(const QString& category);
+    NavigationPosition getLastPosition(const QString& category) const;
+    int findMatchingPositionIndex(const QString& category, int relativePosition) const;
+    void setupNetworkManager();
+    void setupScrollAnimation();
+    void animateScroll(const QString& category, qreal targetX);
+    void stopCurrentAnimation();
+    int countNodes(QSGNode *root);
+    void collectTextures(QSGNode *node, QSet<QSGTexture *> &textures);
+    int countTotalTextures(QSGNode *root);
+    QVector<int> getVisibleIndices();
+    QVector<int> getVisibleIndices(qreal bufferFactor = 0.5); // Add overloaded version that takes a buffer factor
+    void debugLastRowVisibility(); // Add debug helper
 
-    // Add the declaration for calculateItemVerticalPosition
-    qreal calculateItemVerticalPosition(int index);
-    void handleKeyAction(Qt::Key key);  // Add this helper method
+    // Category dimensions helper
+    CategoryDimensions getDimensionsForCategory(const QString& category) const;
+
+    // New helper method for processing swimlane dimensions
+    void processSwimlaneDimensions(const QJsonObject &swimlaneObj);
+
+    void recycleOffscreenTextures();
+    void cacheTexture(int index, QSGTexture* texture);
+    bool isIndexVisible(int index) const;
+
+    int getCurrentItemPositionInCategory() const;
+    void preloadRowTextures(const QString& category);
+
+    int findMatchingPositionInNextCategory(const QString& currentCategory, const QString& nextCategory);
+    qreal calculateRequiredScrollPosition(int targetIndex);
+
+    void ensureLastRowVisible(int targetIndex);
+    void animateToPosition(int targetIndex, qreal desiredY);
+
+    // Add this declaration
+    void loadVisibleTextures();
+    void ensureLastRowFullyVisible();
 
 private slots:
-    // Change these from declarations to actual slot definitions
-    void onNetworkReplyFinished() {
-        QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
-        if (!reply) return;
-        
-        int index = -1;
-        
-        // Minimize mutex lock duration - just extract what we need
-        {
-            QMutexLocker locker(&m_networkMutex);
-            index = m_pendingRequests.key(reply, -1);
-            
-            // Remove from pending requests map while under lock
-            if (index != -1) {
-                m_pendingRequests.remove(index);
-            }
-        }
-        
-        // Process the reply outside of mutex lock to avoid deadlocks
-        if (index == -1) {
-            reply->deleteLater();
-            return;
-        }
-
-        if (reply->error() == QNetworkReply::NoError) {
-            QByteArray data = reply->readAll();
-            if (!data.isEmpty()) {
-                QImage image;
-                if (image.loadFromData(data)) {
-                    m_urlImageCache.insert(reply->url(), image);
-                    processLoadedImage(index, image);
-                } else {
-                    createFallbackTexture(index);
-                }
-            } else {
-                createFallbackTexture(index);
-            }
-        } else {
-            createFallbackTexture(index);
-        }
-
-        reply->deleteLater();
-    }
-
-    void onNetworkError(QNetworkReply::NetworkError code) {
-        QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
-        if (!reply) return;
-        
-        int index = -1;
-        
-        // Minimize mutex lock duration
-        {
-            QMutexLocker locker(&m_networkMutex);
-            index = m_pendingRequests.key(reply, -1);
-            if (index != -1) {
-                m_pendingRequests.remove(index);
-            }
-        }
-        
-        // Process outside the lock
-        if (index != -1) {
-            createFallbackTexture(index);
-        }
-    }
-
-    void onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal) {
-        QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
-        if (!reply) return;
-
-        int index = m_pendingRequests.key(reply, -1);
-        if (index != -1) {
-            qDebug() << "Download progress for index" << index << ":"
-                     << bytesReceived << "/" << bytesTotal << "bytes";
-        }
-    }
-    
-    void onScrollAnimationValueChanged(const QVariant &value) {
-        QPropertyAnimation* anim = qobject_cast<QPropertyAnimation*>(sender());
-        if (!anim) return;
-        
-        // Get the category from the animation object
-        QString category = anim->property("category").toString();
-        if (category.isEmpty()) return;
-        
-        // Update the content X position for this category
-        setCategoryContentX(category, value.toReal());
-    }
+    void onNetworkReplyFinished();
+    void onNetworkError(QNetworkReply::NetworkError code);
+    void onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
+    void onScrollAnimationValueChanged(const QVariant &value);
 };
 
 #endif // CUSTOMIMAGELISTVIEW_H
