@@ -228,9 +228,12 @@ Window {
             topMargin: 10
         }
         z: 1000
+        autoStartCounting: false  // Disable counting on startup
         enabled: true  // Always enabled
         visible: enabled  // Always visible when enabled
         showMetrics: false  // Toggle with S key
+        internalObjectCountEnabled: true  // Enable internal object counting by default
+        viewObjectCountEnabled: true      // Enable view object counting by default
     }
 
     // Test objects loader

@@ -11,12 +11,35 @@ Rectangle {
     property bool enabled: true
     property int updateInterval: 1000
     property bool showMetrics: false
+    property bool autoStartCounting: false  // Add this property to control initial state
+    property bool internalObjectCountEnabled: true
+    property bool viewObjectCountEnabled: true
     width: metrics.width + 20
     height: metrics.height + 20
     
     property var memoryUsage: MemoryUsage
     
     visible: enabled
+
+    onInternalObjectCountEnabledChanged: {
+        if (memoryUsage) {
+            memoryUsage.internalObjectCountEnabled = internalObjectCountEnabled
+        }
+    }
+
+    onViewObjectCountEnabledChanged: {
+        if (memoryUsage) {
+            memoryUsage.viewObjectCountEnabled = viewObjectCountEnabled
+        }
+    }
+
+    Component.onCompleted: {
+        // Set initial state of counters based on autoStartCounting
+        if (memoryUsage) {
+            memoryUsage.internalObjectCountEnabled = internalObjectCountEnabled
+            memoryUsage.viewObjectCountEnabled = viewObjectCountEnabled
+        }
+    }
 
     Column {
         id: metrics
@@ -52,7 +75,7 @@ Rectangle {
             color: "#ffffff"
             font.pixelSize: 12
             visible: showMetrics
-            text: "QObjects(Stack): " + (memoryUsage ? memoryUsage.totalObjects : 0)
+            text: "QObjects(Internal): " + (memoryUsage ? memoryUsage.totalObjects : 0)
         }
 
         Text {
@@ -60,7 +83,7 @@ Rectangle {
             color: "#ffffff"
             font.pixelSize: 12
             visible: showMetrics
-            text: "QObjects(Find): " + (memoryUsage ? memoryUsage.totalObjectsAlt : 0)
+            text: "QObjects(View): " + (memoryUsage ? memoryUsage.totalObjectsAlt : 0)
         }
         
         Text {
