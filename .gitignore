@@ -1,2 +1,6 @@
 # Qt Creator user settings
 *.pro.user*
+scratchpad/ideas.md
+.gitignore
+QtSGWidget.pro.user
+tests/build*

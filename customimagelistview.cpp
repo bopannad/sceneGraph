@@ -1,4 +1,5 @@
 #include "customimagelistview.h"
+#include "customnavlogger.h"
 #include <QSGGeometry>
 #include <QSGGeometryNode>
 #include <QSGTextureMaterial>
@@ -31,6 +32,8 @@
 #include <QtNetwork/QSslConfiguration>
 #include <QRunnable>  // Add this line to include QRunnable
 #include <QPointer>
+#include <QThread>  // Add this include for QThread::currentThreadId()
+
 
 
 
@@ -916,10 +919,9 @@ QSGNode* CustomImageListView::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeD
         if (m_enableTextureMetrics) {
             int realTextureCount = countTotalTextures(parentNode);
             qDebug() << "Scene graph texture metrics - Textures:" << realTextureCount;
-            updateMetricCounts(realNodeCount, realTextureCount);
+            updateMetricCounts(realNodeCount, realTextureCount, m_enableTextureMemoryMetrics ? calculateTextureMemoryUsage() : 0);
         } else {
-            
-            updateMetricCounts(realNodeCount, 0);
+            updateMetricCounts(realNodeCount, 0, 0);
         }
     }
     
@@ -1299,38 +1301,33 @@ void CustomImageListView::navigateRight()
         return;
     }
 
+    // Start navigation scenario
+    CustomNavLogger::instance().beginScenario(CustomNavLogger::SCENARIO_NAV_RIGHT);
+    NAV_LOG_EVENT(CustomNavLogger::NAV_RIGHT_START);
+    NAV_LOG_PARAM(CustomNavLogger::NAV_RIGHT_START, m_currentIndex, "fromIndex", m_currentIndex);
+
     QString currentCategory = m_imageData[m_currentIndex].category;
     int nextIndex = m_currentIndex + 1;
     
-    // Check if we're at the rightmost item in the category
-    bool isRightmost = true;
-    for (int i = m_currentIndex + 1; i < m_imageData.size(); i++) {
-        if (m_imageData[i].category == currentCategory) {
-            isRightmost = false;
-            break;
-        }
-    }
-    
-    if (isRightmost) {
-        qDebug() << "At rightmost position, no action";
-        return;  // At rightmost position, do nothing
-    }
-    
-    // Handle navigation within the category
+    // Find next item in same category
     while (nextIndex < m_imageData.size()) {
         if (m_imageData[nextIndex].category != currentCategory) {
             break;
         }
         
-        // Get category dimensions for animation calculations
         CategoryDimensions dims = getDimensionsForCategory(currentCategory);
         
-        // Update current index first
+        // Log old position before change
+        NAV_LOG_POS("PreMove", getCategoryContentX(currentCategory), m_contentY, m_currentIndex);
+        
         setCurrentIndex(nextIndex);
+        
+        NAV_LOG_EVENT_IDX(CustomNavLogger::NAV_INDEX_CHANGED, nextIndex);
+        
         ensureFocus();
         updateCurrentCategory();
         
-        // Calculate scroll target position with animation
+        // Calculate scroll position with bounds check logging
         int itemsBeforeInCategory = 0;
         for (int i = 0; i < nextIndex; i++) {
             if (m_imageData[i].category == currentCategory) {
@@ -1339,23 +1336,23 @@ void CustomImageListView::navigateRight()
         }
         
         qreal targetX = itemsBeforeInCategory * (dims.posterWidth + dims.itemSpacing);
-        
-        // Center the target item in view
         targetX = qMax(0.0, targetX - (width() - dims.posterWidth) / 2);
         
-        // Log animation details to diagnose issues
-        qDebug() << "Right navigation - target X:" << targetX 
-                 << "dims.posterWidth:" << dims.posterWidth
-                 << "Items before:" << itemsBeforeInCategory;
+        // Log position calculation
+        NAV_LOG_PARAM(CustomNavLogger::NAV_CALC_POS, nextIndex, "targetX", targetX);
         
-        // Animate to target position
+        
+        // Single animation call with logging
         animateScroll(currentCategory, targetX);
         
-        // Call ensure visible after animation setup
         ensureIndexVisible(nextIndex);
         update();
         return;
     }
+
+    // Log navigation end if we reach category boundary
+    NAV_LOG_EVENT(CustomNavLogger::NAV_RIGHT_END);
+    CustomNavLogger::instance().endScenario();
 }
 
 void CustomImageListView::navigateUp()
@@ -2178,70 +2175,78 @@ void CustomImageListView::setupScrollAnimation()
 
 void CustomImageListView::animateScroll(const QString& category, qreal targetX)
 {
-    // Stop any existing animation first
-    stopCurrentAnimation();
+    QPropertyAnimation* existingAnim = nullptr;
     
-    // Ensure we don't exceed bounds
-    targetX = qBound(0.0, targetX, qMax(0.0, categoryContentWidth(category) - width()));
-    
-    // Create a new animation for this category if it doesn't exist
-    if (!m_categoryAnimations.contains(category)) {
-        QPropertyAnimation* anim = new QPropertyAnimation(this);
-        anim->setDuration(300);
-        anim->setEasingCurve(QEasingCurve::OutCubic);
-        
-        // We need a unique property name that doesn't include special characters
-        QString propName = "scrollPos_" + QString::number(qHash(category));
-        
-        // Initialize the dynamic property
-        setProperty(propName.toLatin1().constData(), getCategoryContentX(category));
-        
-        // Configure animation
-        anim->setTargetObject(this);
-        anim->setPropertyName(propName.toLatin1());
-        
-        // Store the hash and category in the animation object
-        anim->setProperty("categoryHash", qHash(category));
-        anim->setProperty("category", category);
-        
-        // Connect using old-style signal/slot for Qt 5.6 compatibility
-        connect(anim, SIGNAL(valueChanged(QVariant)), this, SLOT(onScrollAnimationValueChanged(QVariant)));
-        
-        m_categoryAnimations[category] = anim;
+    if (m_categoryAnimations.contains(category)) {
+        existingAnim = m_categoryAnimations[category];
+        if (existingAnim && existingAnim->state() == QPropertyAnimation::Running) {
+            existingAnim->stop();
+        }
+        // Remove from tracking map while under lock
+        m_categoryAnimations.remove(category);
     }
     
-    // Get the animation for this category
-    QPropertyAnimation* anim = m_categoryAnimations[category];
-    if (!anim) return;
-    
-    // Update the property before starting the animation
-    QString propName = "scrollPos_" + QString::number(qHash(category));
-    setProperty(propName.toLatin1().constData(), getCategoryContentX(category));
-    
-    // Ensure animation is stopped
-    if (anim->state() == QPropertyAnimation::Running) {
-        anim->stop();
+    // Clean up old animation outside the lock
+    if (existingAnim) {
+        disconnect(existingAnim, nullptr, this, nullptr);
+        existingAnim->deleteLater();
     }
     
-    // Configure and start
-    anim->setStartValue(QVariant(getCategoryContentX(category)));
-    anim->setEndValue(QVariant(targetX));
+    // Create and configure new animation outside of lock
+    QPropertyAnimation* animation = new QPropertyAnimation(this, "");
     
-    qDebug() << "Starting scroll animation for category:" << category 
-             << "from:" << getCategoryContentX(category) 
-             << "to:" << targetX;
+    // Register the dynamic property if needed
+    QString propName = QString("categoryPosition_%1").arg(category);
+    if (!checkAndCreateDynamicProperty(propName)) {
+        qWarning() << "Failed to create dynamic property for" << category;
+        animation->deleteLater();
+        return;
+    }
+    
+    // Configure the animation
+    animation->setTargetObject(this);
+    animation->setPropertyName(propName.toLatin1());
+    animation->setStartValue(getCategoryContentX(category));
+    animation->setEndValue(targetX);
+    animation->setDuration(300);
+    animation->setEasingCurve(QEasingCurve::OutCubic);
+    
+    // Store category name as property on the animation for callbacks
+    animation->setProperty("category", category);
+    
+    // Begin navigation scenario and log animation start
+    CustomNavLogger::instance().beginScenario(CustomNavLogger::SCENARIO_NAV_RIGHT);
+    NAV_LOG_EVENT(CustomNavLogger::NAV_ANIM_START);
+    NAV_LOG_PARAM(CustomNavLogger::NAV_ANIM_START, -1, "targetX", targetX);
+    
+    // Connect signals with explicit tracking
+    connect(animation, &QPropertyAnimation::valueChanged, 
+            this, &CustomImageListView::onScrollAnimationValueChanged, 
+            Qt::QueuedConnection);
+    connect(animation, &QPropertyAnimation::finished, 
+            this, &CustomImageListView::onAnimationFinished,
+            Qt::QueuedConnection);
+    
+    m_categoryAnimations[category] = animation;
+
+    // Start the animation outside any locks
+    qDebug() << "Starting animation for" << category << "from" 
+             << getCategoryContentX(category) << "to" << targetX;
              
-    anim->start();
+    NAV_LOG_POS("AnimStart", getCategoryContentX(category), 0, -1);
+    animation->start();
 }
 
 void CustomImageListView::stopCurrentAnimation()
 {
-    // Stop all category animations
+    // Log animation abort for each running animation
     for (QPropertyAnimation* anim : m_categoryAnimations.values()) {
-        if (anim->state() == QPropertyAnimation::Running) {
+        if (anim && anim->state() == QPropertyAnimation::Running) {
+            NAV_LOG_EVENT(CustomNavLogger::NAV_ANIM_ABORTED);
             anim->stop();
         }
     }
+    // ...existing code...
 }
 
 void CustomImageListView::setStartPositionX(qreal x)
@@ -2267,6 +2272,15 @@ void CustomImageListView::setEnableTextureMetrics(bool enable)
     if (m_enableTextureMetrics != enable) {
         m_enableTextureMetrics = enable;
         emit enableTextureMetricsChanged();
+        update();
+    }
+}
+
+void CustomImageListView::setEnableTextureMemoryMetrics(bool enable)
+{
+    if (m_enableTextureMemoryMetrics != enable) {
+        m_enableTextureMemoryMetrics = enable;
+        emit enableTextureMemoryMetricsChanged();
         update();
     }
 }
@@ -2424,3 +2438,196 @@ void CustomImageListView::animateVerticalScroll(qreal targetY)
     m_scrollAnimation->start();
 }
 
+void CustomImageListView::onScrollAnimationValueChanged(const QVariant &value) 
+{
+    QPropertyAnimation* anim = qobject_cast<QPropertyAnimation*>(sender());
+    if (!anim) {
+        qWarning() << "onScrollAnimationValueChanged: No valid animation sender!";
+        return;
+    }
+    
+    // Get the category from the animation object
+    QString category = anim->property("category").toString();
+    if (category.isEmpty()) {
+        qWarning() << "onScrollAnimationValueChanged: No category property in animation!";
+        return;
+    }
+    
+    qreal newValue = value.toReal();
+    
+    // Only log occasionally to avoid flooding the console
+    static int logCounter = 0;
+    if (logCounter++ % 20 == 0) { // Reduced frequency to every 20 updates
+        qDebug() << "Animation update for" << category << ":"
+                 << "position=" << newValue
+                 << "progress=" << anim->currentTime() << "/" << anim->duration() << "ms";
+    }
+    
+    // Update the content X position for this category
+    setCategoryContentX(category, newValue);
+    
+    // Check if animation has reached end value
+    if (qAbs(newValue - anim->endValue().toReal()) < 0.001) {
+        qDebug() << "Animation for" << category << "reached end value:" << newValue;
+    }
+
+    // Add position logging during animation
+    NAV_LOG_POS("AnimUpdate", newValue, 0.0, -1);
+}
+
+void CustomImageListView::onAnimationFinished() 
+{
+    // Get animation that finished
+    QPropertyAnimation* animation = qobject_cast<QPropertyAnimation*>(sender());
+    if (!animation) {
+        qWarning() << "onAnimationFinished: Invalid animation sender!";
+        return;
+    }
+    
+    // Get category from animation property
+    QString category = animation->property("category").toString();
+    
+    qDebug() << "Animation finished for category:" << category;
+    
+    // Clean up animation with minimal lock time
+    {
+        QMutexLocker locker(&m_animationMutex);
+        if (!category.isEmpty() && m_categoryAnimations.contains(category)) {
+            QPropertyAnimation* mappedAnim = m_categoryAnimations[category];
+            if (mappedAnim == animation) {
+                m_categoryAnimations.remove(category);
+                qDebug() << "Animation for" << category << "removed from tracking";
+            }
+        }
+    }
+    
+    // Log completion event
+    NAV_LOG_EVENT(CustomNavLogger::NAV_ANIM_COMPLETE);
+    CustomNavLogger::instance().endScenario();
+    
+    // Make sure we don't delete while callback is running
+    QTimer::singleShot(0, animation, &QObject::deleteLater);
+    
+    // Request update
+    update();
+}
+
+// Add diagnostic utility method to track dynamic properties
+Q_INVOKABLE void CustomImageListView::dumpDynamicProperties()
+{
+    qDebug() << "=== Dynamic Property Dump for CustomImageListView ===";
+    
+    // Get all property names for this QObject
+    QList<QByteArray> propNames = dynamicPropertyNames();
+    qDebug() << "Total dynamic properties:" << propNames.size();
+    
+    for (const QByteArray &propName : propNames) {
+        QVariant value = property(propName);
+        qDebug() << " - Property:" << propName 
+                 << "Type:" << (value.isValid() ? value.typeName() : "invalid")
+                 << "Value:" << (value.isValid() ? value.toString() : "N/A");
+    }
+    
+    // Also dump animation state
+    qDebug() << "\nActive animations:" << m_categoryAnimations.size();
+    for (auto it = m_categoryAnimations.begin(); it != m_categoryAnimations.end(); ++it) {
+        QPropertyAnimation* anim = it.value();
+        if (anim) {
+            qDebug() << " - Category:" << it.key()
+                     << "State:" << anim->state() 
+                     << "Property:" << anim->propertyName()
+                     << "Target:" << (anim->targetObject() == this ? "this" : "other");
+        } else {
+            qDebug() << " - Category:" << it.key() << "has NULL animation!";
+        }
+    }
+    
+    qDebug() << "================================================";
+}
+
+bool CustomImageListView::checkAndCreateDynamicProperty(const QString& propName)
+{
+    // Check if property exists
+    if (property(propName.toLatin1()).isValid()) {
+        return true;
+    }
+    
+    // Try to create the property
+    bool success = setProperty(propName.toLatin1(), 0.0);
+    return success;
+}
+
+void CustomImageListView::onAnimationValueDetected(const QVariant &value)
+{
+    // Simple diagnostic logging slot
+    qDebug() << "Animation value detected:" << value.toReal();
+}
+
+void CustomImageListView::onAnimationFinishedDetected()
+{
+    // Simple diagnostic logging slot
+    qDebug() << "Animation finished detected";
+}
+
+void CustomImageListView::abortCurrentNavigationScenario()
+{
+    // Force-clear any potentially locked state
+    QMutexLocker locker(&m_animationMutex);
+    
+    // Stop and clean up all animations
+    for (auto it = m_categoryAnimations.begin(); it != m_categoryAnimations.end(); ++it) {
+        QPropertyAnimation* anim = it.value();
+        if (anim) {
+            anim->stop();
+            disconnect(anim, nullptr, this, nullptr);
+            anim->deleteLater();
+        }
+    }
+    m_categoryAnimations.clear();
+    
+    // End any active logging scenario
+    if (CustomNavLogger::instance().isScenarioActive()) {
+        CustomNavLogger::instance().logEvent(CustomNavLogger::NAV_ANIM_ABORTED);
+        CustomNavLogger::instance().endScenario();
+    }
+    
+    update();
+}
+
+// o1: For a “quick and dirty” metric, especially on an embedded device like a Raspberry Pi, your snippet is good enough to get an estimate. If you only use typical image textures in RGBA format (for example, if you load them via QQuickTextureFactory or a typical QImage -> QSGTexture path), it’s a perfectly valid approximation.
+// To be more precise, you would ideally check the actual QSGTexture format in use, or any platform-specific info, to ensure you aren’t overcounting or undercounting.
+// currently m_nodes is flat. If you have a more complex scene graph structure, you might need to traverse the scene graph to get a more accurate count. or use already collected qSet in the textureCount 
+qint64 CustomImageListView::calculateTextureMemoryUsage() const
+{
+    qint64 totalMemory = 0;
+    for (const auto& node : m_nodes) {
+        if (node.texture) {
+            QSize size = node.texture->textureSize();
+            int bytesPerPixel = 4; // Assuming RGBA format
+            totalMemory += size.width() * size.height() * bytesPerPixel;
+        }
+    }
+    return totalMemory;
+}
+
+// this is not used for now. if scenegraph becomes complex and textures are nested, then we should use this
+qint64 CustomImageListView::calculateTextureMemoryFromSet(const QSet<QSGTexture*>& textureSet) const
+{
+    qint64 totalMemory = 0;
+    
+    // Calculate memory for each unique texture
+    for (QSGTexture* texture : textureSet) {
+        if (!texture) continue;
+
+        // Get base size of texture
+        QSize size = texture->textureSize();
+        
+        // Default to 4 bytes per pixel (32-bit RGBA)
+        int bytesPerPixel = 4;
+        
+        // Accumulate memory usage for this texture
+        totalMemory += size.width() * size.height() * bytesPerPixel;
+    }
+    
+    return totalMemory;
+}
